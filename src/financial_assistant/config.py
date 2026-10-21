@@ -9,7 +9,12 @@ load_dotenv()
 def get_model() -> ChatOpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
     model_name = os.getenv("OPENAI_MODEL")
-    base_url = os.getenv("OPENAI_URL_BASE") or None
+    # OPENAI_URL_BASE is the legacy (misspelled) name, kept as a fallback.
+    base_url = (
+        os.getenv("OPENAI_BASE_URL")
+        or os.getenv("OPENAI_URL_BASE")
+        or None
+    )
 
     if not api_key:
         raise ValueError("OPENAI_API_KEY is not configured.")
@@ -22,4 +27,4 @@ def get_model() -> ChatOpenAI:
         api_key=api_key,
         base_url=base_url,
         temperature=0,
-    )
+    )

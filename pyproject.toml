@@ -8,11 +8,26 @@ version = "0.1.0"
 description = "Multi-agent financial research assistant built with LangGraph"
 requires-python = ">=3.11"
 dependencies = [
-    "langgraph",
-    "langchain-openai",
-    "python-dotenv",
-    "langsmith",
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    "langchain-openai>=0.2",
+    "langsmith>=0.1",
+    "pydantic>=2.0",
+    "pandas>=2.0",
+    "requests>=2.31",
+    "tavily-python>=0.5",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

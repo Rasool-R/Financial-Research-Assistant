@@ -16,9 +16,6 @@ def main():
     print("\n--- Final Financial Research Report ---")
     print(result["final_report"])
 
-    print("\n--- Reviewer Feedback ---")
-    print(result["review_feedback"])   
-
 
 if __name__ == "__main__":
     main()

@@ -17,6 +17,7 @@ Rules:
 - Explain trend, RSI, and MACD separately.
 - Identify agreements or conflicts between indicators.
 - Distinguish observations from interpretations.
+- If data_quality.is_stale is true, say that the prices may not be live.
 - Do not present the analysis as a guaranteed prediction.
 - Do not give personalized financial advice.
 - Keep the report concise and structured.

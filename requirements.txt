@@ -1,8 +1,2 @@
-langgraph
-langchain-openai
-python-dotenv
-langsmith
-pytest
-requests
-pandas
-tavily-python
+# Dependencies are declared in pyproject.toml.
+-e .[dev]

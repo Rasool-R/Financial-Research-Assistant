@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import requests
@@ -16,15 +17,49 @@ SUPPORTED_INTERVALS = {
     "1day",
 }
 
+INTERVAL_DELTAS = {
+    "1h": timedelta(hours=1),
+    "4h": timedelta(hours=4),
+    "1day": timedelta(days=1),
+}
+
 OHLC_COLUMNS = ["datetime", "open", "high", "low", "close"]
+
+
+def drop_incomplete_candle(
+    df: pd.DataFrame,
+    interval: str,
+    now: datetime | None = None,
+) -> pd.DataFrame:
+    """Remove the last candle if it has not closed yet.
+
+    Twelve Data also returns the candle that is still forming. Indicators
+    computed on it would change with every tick, so it is excluded.
+    """
+
+    if df.empty:
+        return df
+
+    now = now or datetime.now(timezone.utc)
+    last_candle_end = df["datetime"].iloc[-1] + INTERVAL_DELTAS[interval]
+
+    if last_candle_end > now:
+        return df.iloc[:-1].reset_index(drop=True)
+
+    return df
 
 
 def get_market_data(
     symbol: str,
     interval: str = "1h",
     outputsize: int = 100,
+    drop_incomplete: bool = True,
 ) -> pd.DataFrame:
-    """Fetch historical OHLC candles for a supported forex or metal symbol."""
+    """Fetch historical OHLC candles for a supported forex or metal symbol.
+
+    By default the candle that is still forming is dropped, so the result
+    contains at most ``outputsize`` closed candles.
+    """
 
     symbol = symbol.strip().upper()
 
@@ -112,6 +147,9 @@ def get_market_data(
         .drop_duplicates(subset=["datetime"])
         .reset_index(drop=True)
     )
+
+    if drop_incomplete:
+        df = drop_incomplete_candle(df, interval)
 
     if df.empty:
         raise RuntimeError("No valid OHLC candles remain after cleaning.")
