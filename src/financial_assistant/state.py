@@ -15,6 +15,8 @@ class FinancialAssistantState(TypedDict, total=False):
     market_summary: dict[str, Any]
     market_analysis: str
 
+    analysis_findings: str
+
     # Future agent outputs
     research_findings: str
     final_report: str

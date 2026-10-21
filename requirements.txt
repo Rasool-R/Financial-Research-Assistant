@@ -5,3 +5,4 @@ langsmith
 pytest
 requests
 pandas
+tavily-python
