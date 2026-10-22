@@ -7,7 +7,6 @@ from financial_assistant.config import get_model
 from financial_assistant.parsing import invoke_and_parse
 from financial_assistant.schemas import ReviewResult
 
-
 SYSTEM_PROMPT = """
 You are an independent quality reviewer for a financial research report.
 

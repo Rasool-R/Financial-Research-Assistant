@@ -1,0 +1,179 @@
+"""Frozen scenarios for evaluating the workflow.
+
+Market data is synthetic but deterministic (seeded), and the news results are
+fixed fixtures. Only the LLM calls are real, so differences between runs come
+from the prompts/models and not from the market or the web.
+"""
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+import numpy as np
+import pandas as pd
+
+from financial_assistant.tools.market_data import INTERVAL_DELTAS
+
+N_CANDLES = 100
+
+
+def build_candles(
+    closes: np.ndarray,
+    interval: str,
+    last_candle_start: datetime,
+) -> pd.DataFrame:
+    """Turn a close series into an OHLC frame ending at ``last_candle_start``."""
+
+    delta = INTERVAL_DELTAS[interval]
+    n = len(closes)
+    starts = [last_candle_start - delta * (n - 1 - i) for i in range(n)]
+    opens = np.concatenate([[closes[0]], closes[:-1]])
+    spread = np.abs(closes) * 0.0005
+
+    return pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(starts, utc=True),
+            "open": opens,
+            "high": np.maximum(opens, closes) + spread,
+            "low": np.minimum(opens, closes) - spread,
+            "close": closes,
+        }
+    )
+
+
+def trend_series(base: float, drift: float, noise: float, seed: int):
+    rng = np.random.default_rng(seed)
+    steps = rng.normal(drift, noise, N_CANDLES)
+    return base + np.cumsum(steps)
+
+
+def range_series(base: float, amplitude: float, seed: int):
+    rng = np.random.default_rng(seed)
+    wave = amplitude * np.sin(np.linspace(0, 6 * np.pi, N_CANDLES))
+    return base + wave + rng.normal(0, amplitude * 0.05, N_CANDLES)
+
+
+def fresh_start(interval: str) -> datetime:
+    """Start of the most recent candle that has already closed."""
+
+    delta = INTERVAL_DELTAS[interval]
+    now = datetime.now(timezone.utc)
+    step = int(delta.total_seconds())
+    closed_end = datetime.fromtimestamp(
+        (int(now.timestamp()) // step) * step, tz=timezone.utc
+    )
+    return closed_end - delta
+
+
+GOLD_NEWS = [
+    {
+        "title": "Gold edges higher as the dollar softens",
+        "url": "https://news.example.com/gold-edges-higher",
+        "content": (
+            "Gold prices moved higher as the US dollar softened and "
+            "investors waited for the next central bank decision."
+        ),
+        "published_date": "2026-10-20",
+        "score": 0.9,
+    },
+    {
+        "title": "Analysts watch real yields for gold direction",
+        "url": "https://news.example.com/real-yields-gold",
+        "content": (
+            "Analysts said falling real yields could support bullion, "
+            "while a stronger dollar remains the main downside risk."
+        ),
+        "published_date": "2026-10-19",
+        "score": 0.8,
+    },
+]
+
+EURUSD_NEWS = [
+    {
+        "title": "Euro slips as growth worries weigh",
+        "url": "https://news.example.com/euro-slips",
+        "content": (
+            "The euro slipped against the dollar after weak regional "
+            "growth data raised questions about the policy outlook."
+        ),
+        "published_date": "2026-10-21",
+        "score": 0.9,
+    },
+]
+
+
+@dataclass
+class Scenario:
+    name: str
+    symbol: str
+    interval: str
+    description: str
+    make_candles: Callable[[], pd.DataFrame]
+    news: list[dict] = field(default_factory=list)
+    expected_trend: str | None = None
+    expect_stale: bool = False
+    query: str = "Analyze the technical conditions and recent news."
+
+
+def _gold_uptrend() -> pd.DataFrame:
+    closes = trend_series(4300.0, drift=1.2, noise=3.0, seed=1)
+    return build_candles(closes, "1h", fresh_start("1h"))
+
+
+def _eurusd_downtrend() -> pd.DataFrame:
+    closes = trend_series(1.1000, drift=-0.0002, noise=0.0004, seed=2)
+    return build_candles(closes, "1h", fresh_start("1h"))
+
+
+def _gold_range() -> pd.DataFrame:
+    closes = range_series(4300.0, amplitude=15.0, seed=3)
+    return build_candles(closes, "1h", fresh_start("1h"))
+
+
+def _gold_stale() -> pd.DataFrame:
+    # Friday candles from a fixed past date: always stale when evaluated.
+    closes = trend_series(4300.0, drift=0.8, noise=3.0, seed=4)
+    last_start = datetime(2026, 1, 2, 21, 0, tzinfo=timezone.utc)
+    return build_candles(closes, "1h", last_start)
+
+
+SCENARIOS = [
+    Scenario(
+        name="gold_uptrend_with_news",
+        symbol="XAU/USD",
+        interval="1h",
+        description="Fresh uptrend, two relevant news items.",
+        make_candles=_gold_uptrend,
+        news=GOLD_NEWS,
+        expected_trend="bullish",
+    ),
+    Scenario(
+        name="eurusd_downtrend_with_news",
+        symbol="EUR/USD",
+        interval="1h",
+        description="Fresh downtrend, one relevant news item.",
+        make_candles=_eurusd_downtrend,
+        news=EURUSD_NEWS,
+        expected_trend="bearish",
+    ),
+    Scenario(
+        name="gold_range_no_news",
+        symbol="XAU/USD",
+        interval="1h",
+        description="Sideways market and an empty news search.",
+        make_candles=_gold_range,
+        news=[],
+    ),
+    Scenario(
+        name="gold_stale_weekend_data",
+        symbol="XAU/USD",
+        interval="1h",
+        description="Old candles; the report must not present them as live.",
+        make_candles=_gold_stale,
+        news=GOLD_NEWS,
+        expected_trend="bullish",
+        expect_stale=True,
+    ),
+]
+
+SCENARIOS_BY_NAME = {scenario.name: scenario for scenario in SCENARIOS}

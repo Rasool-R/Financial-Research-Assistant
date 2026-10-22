@@ -4,7 +4,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from financial_assistant.config import get_model
 
-
 SYSTEM_PROMPT = """
 You are the final reporting agent in a financial research assistant.
 

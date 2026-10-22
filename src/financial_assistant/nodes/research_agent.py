@@ -7,7 +7,6 @@ from financial_assistant.retry import call_with_retries
 from financial_assistant.schemas import ResearchOutput
 from financial_assistant.tools.web_search import search_web
 
-
 SYSTEM_PROMPT = """
 You are a financial news research agent.
 

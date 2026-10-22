@@ -19,6 +19,9 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
+[project.scripts]
+financial-assistant = "financial_assistant.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
@@ -31,3 +34,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 88
+src = ["src", "."]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

@@ -1,6 +1,5 @@
 import pandas as pd
 
-
 REQUIRED_COLUMNS = {"datetime", "open", "high", "low", "close"}
 
 

@@ -1,10 +1,10 @@
 from langgraph.graph import END, START, StateGraph
 
 from financial_assistant.config import MAX_REVISIONS
-from financial_assistant.nodes.market_agent import market_agent
 from financial_assistant.nodes.analysis_agent import analysis_agent
-from financial_assistant.nodes.research_agent import research_agent
+from financial_assistant.nodes.market_agent import market_agent
 from financial_assistant.nodes.report_agent import report_agent
+from financial_assistant.nodes.research_agent import research_agent
 from financial_assistant.nodes.reviewer_agent import reviewer_agent
 from financial_assistant.retry import RETRY_POLICY
 from financial_assistant.state import FinancialAssistantState

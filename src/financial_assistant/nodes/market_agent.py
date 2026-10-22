@@ -5,7 +5,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from financial_assistant.config import get_model
 from financial_assistant.tools.market_summary import get_market_summary
 
-
 SYSTEM_PROMPT = """
 You are a financial market research analyst.
 

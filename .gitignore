@@ -8,3 +8,5 @@ dist/
 build/
 *.egg-info/
 .history
+.ruff_cache/
+evaluation/results/
