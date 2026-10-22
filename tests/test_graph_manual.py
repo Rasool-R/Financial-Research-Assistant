@@ -16,6 +16,15 @@ def main():
     print("\n--- Final Financial Research Report ---")
     print(result["final_report"])
 
+    print("\n--- Review ---")
+    print(result["review_feedback"])
+    print(f"\nRevisions: {result.get('revision_count', 0)}")
+
+    if result.get("errors"):
+        print("\n--- Non-fatal errors ---")
+        for error in result["errors"]:
+            print(f"- {error}")
+
 
 if __name__ == "__main__":
     main()

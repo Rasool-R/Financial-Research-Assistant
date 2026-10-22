@@ -3,6 +3,7 @@ from financial_assistant.nodes.research_agent import (
     sanitize_research_output,
 )
 from financial_assistant.schemas import ResearchFinding, ResearchOutput
+from tests.fakes import FakeModel
 
 
 def test_prepare_search_results_removes_duplicate_urls():
@@ -138,21 +139,6 @@ def test_sanitize_removes_duplicate_urls():
     assert len(result.findings) == 1
 
 
-class FakeResponse:
-    def __init__(self, content):
-        self.content = content
-
-
-class FakeModel:
-    def __init__(self, replies):
-        self.replies = list(replies)
-        self.calls = 0
-
-    def invoke(self, messages):
-        self.calls += 1
-        return FakeResponse(self.replies.pop(0))
-
-
 VALID_JSON = (
     '{"symbol": "XAU/USD", "summary": "Gold is higher.", "findings": ['
     '{"title": "t", "published_date": null, '
@@ -175,7 +161,7 @@ def test_research_agent_retries_after_unparseable_answer(monkeypatch):
 
     result = module.research_agent({"symbol": "XAU/USD", "user_query": "gold"})
 
-    assert model.calls == 2
+    assert len(model.calls) == 2
     assert len(result["research_findings"]["findings"]) == 1
 
 
@@ -188,3 +174,43 @@ def test_research_agent_falls_back_when_parsing_keeps_failing(monkeypatch):
     findings = result["research_findings"]
     assert findings["findings"] == []
     assert "could not be parsed" in findings["limitations"][0]
+
+
+def test_research_agent_degrades_when_web_search_fails(monkeypatch):
+    from financial_assistant.nodes import research_agent as module
+
+    def broken_search(**kwargs):
+        raise RuntimeError("Tavily is down")
+
+    monkeypatch.setattr(module, "search_web", broken_search)
+
+    result = module.research_agent({"symbol": "XAU/USD", "user_query": "gold"})
+
+    assert result["research_findings"]["findings"] == []
+    assert "Web search failed" in result["research_findings"]["limitations"][0]
+    assert result["errors"] and "research_agent" in result["errors"][0]
+
+
+def test_research_agent_retries_transient_search_errors(monkeypatch):
+    import requests
+
+    from financial_assistant import retry
+    from financial_assistant.nodes import research_agent as module
+
+    attempts = []
+
+    def flaky_search(**kwargs):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RuntimeError("network") from requests.ConnectionError()
+        return []
+
+    monkeypatch.setattr(module, "search_web", flaky_search)
+    monkeypatch.setattr(retry.time, "sleep", lambda seconds: None)
+
+    result = module.research_agent({"symbol": "XAU/USD", "user_query": "gold"})
+
+    assert len(attempts) == 3
+    assert result["research_findings"]["summary"] == (
+        "No relevant news results were found."
+    )

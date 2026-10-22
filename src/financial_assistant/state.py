@@ -1,4 +1,5 @@
-from typing import Any, TypedDict
+import operator
+from typing import Annotated, Any, TypedDict
 
 
 class FinancialAssistantState(TypedDict, total=False):
@@ -17,10 +18,14 @@ class FinancialAssistantState(TypedDict, total=False):
 
     analysis_findings: str
 
-    # Future agent outputs
-    research_findings: str
-    final_report: str
-    review_feedback: str
+    # Research agent output
+    research_findings: dict[str, Any]
 
-    # Workflow metadata
-    errors: list[str]
+    # Report and review
+    final_report: str
+    review: dict[str, Any]
+    review_feedback: str
+    revision_count: int
+
+    # Non-fatal problems collected from parallel/degrading nodes
+    errors: Annotated[list[str], operator.add]

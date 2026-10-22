@@ -46,3 +46,63 @@ def test_compact_research_handles_missing_data():
 
     assert result["findings"] == []
     assert result["limitations"] == []
+
+
+def run_report(monkeypatch, state):
+    import json
+
+    from financial_assistant.nodes import report_agent as module
+    from tests.fakes import FakeModel
+
+    model = FakeModel(["report body"])
+    monkeypatch.setattr(module, "get_model", lambda: model)
+
+    base_state = {
+        "market_summary": {"symbol": "XAU/USD", "interval": "1h"},
+        "market_analysis": "analysis one",
+        "analysis_findings": "analysis two",
+        "research_findings": None,
+    }
+    base_state.update(state)
+
+    result = module.report_agent(base_state)
+    evidence = json.loads(model.calls[0][1].content)
+
+    return result, evidence
+
+
+def test_first_report_has_no_revision_context(monkeypatch):
+    result, evidence = run_report(monkeypatch, {})
+
+    assert result["revision_count"] == 0
+    assert "previous_report" not in evidence
+    assert "reviewer_feedback" not in evidence
+
+
+def test_revision_receives_previous_report_and_feedback(monkeypatch):
+    state = {
+        "final_report": "old draft",
+        "revision_count": 0,
+        "review": {
+            "verdict": "NEEDS_REVISION",
+            "critical_issues": ["wrong RSI"],
+            "other_issues": [],
+            "recommendations": ["fix RSI"],
+        },
+    }
+
+    result, evidence = run_report(monkeypatch, state)
+
+    assert result["revision_count"] == 1
+    assert evidence["previous_report"] == "old draft"
+    assert evidence["reviewer_feedback"]["critical_issues"] == ["wrong RSI"]
+
+
+def test_pipeline_warnings_are_passed_to_the_report(monkeypatch):
+    _, evidence = run_report(
+        monkeypatch, {"errors": ["research_agent: Web search failed"]}
+    )
+
+    assert evidence["pipeline_warnings"] == [
+        "research_agent: Web search failed"
+    ]

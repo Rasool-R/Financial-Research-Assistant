@@ -1,8 +1,11 @@
 import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import PydanticOutputParser
 
 from financial_assistant.config import get_model
+from financial_assistant.parsing import invoke_and_parse
+from financial_assistant.schemas import ReviewResult
 
 
 SYSTEM_PROMPT = """
@@ -26,21 +29,47 @@ Rules:
 - Preserve uncertainty when evidence is inconclusive.
 - Write in English and be concise.
 
-Return exactly this structure:
-
-VERDICT: PASS or NEEDS_REVISION
-
-CRITICAL ISSUES:
-- List material factual errors, or None.
-
-OTHER ISSUES:
-- List minor problems, or None.
-
-RECOMMENDATIONS:
-- List specific improvements, or None.
+Verdict rules:
+- Use NEEDS_REVISION if there is at least one critical issue.
+- Use PASS only if there are no critical issues.
+- Use empty lists instead of writing "None".
 
 Keep the entire review under 250 words.
 """
+
+
+def format_review(review: dict) -> str:
+    """Render a structured review as readable text."""
+
+    def section(title: str, items: list[str]) -> str:
+        lines = [f"- {item}" for item in items] or ["- None"]
+        return f"{title}:\n" + "\n".join(lines)
+
+    return "\n\n".join(
+        [
+            f"VERDICT: {review['verdict']}",
+            section("CRITICAL ISSUES", review.get("critical_issues", [])),
+            section("OTHER ISSUES", review.get("other_issues", [])),
+            section("RECOMMENDATIONS", review.get("recommendations", [])),
+        ]
+    )
+
+
+def unreviewed_result(reason: str) -> dict:
+    """Result used when the reviewer could not produce a verdict."""
+
+    review = {
+        "verdict": "UNREVIEWED",
+        "critical_issues": [],
+        "other_issues": [reason],
+        "recommendations": [],
+    }
+
+    return {
+        "review": review,
+        "review_feedback": format_review(review),
+        "errors": [f"reviewer_agent: {reason}"],
+    }
 
 
 def limit_text(value: str, max_chars: int) -> str:
@@ -92,21 +121,38 @@ def reviewer_agent(state: dict) -> dict:
         max_chars=6000,
     )
 
+    parser = PydanticOutputParser(pydantic_object=ReviewResult)
+
     model = get_model()
 
-    response = model.invoke(
-        [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(
-                content=(
-                    f"Market data:\n{market_evidence}\n\n"
-                    f"Research evidence:\n{research_evidence}\n\n"
-                    f"Final report to review:\n{report_to_review}"
-                )
-            ),
-        ]
-    )
+    messages = [
+        SystemMessage(content=SYSTEM_PROMPT),
+        HumanMessage(
+            content=(
+                f"Market data:\n{market_evidence}\n\n"
+                f"Research evidence:\n{research_evidence}\n\n"
+                f"Final report to review:\n{report_to_review}\n\n"
+                f"{parser.get_format_instructions()}"
+            )
+        ),
+    ]
+
+    try:
+        result = invoke_and_parse(model, messages, parser)
+    except ValueError as exc:
+        return unreviewed_result(
+            f"The review could not be parsed ({type(exc).__name__})."
+        )
+    except Exception as exc:
+        return unreviewed_result(f"The review model call failed: {exc}")
+
+    review = result.model_dump()
+
+    # A critical issue always means the report needs another pass.
+    if review["critical_issues"]:
+        review["verdict"] = "NEEDS_REVISION"
 
     return {
-        "review_feedback": response.content,
+        "review": review,
+        "review_feedback": format_review(review),
     }

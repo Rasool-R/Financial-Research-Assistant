@@ -1,8 +1,9 @@
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
-from pydantic import ValidationError
 
 from financial_assistant.config import get_model
+from financial_assistant.parsing import invoke_and_parse
+from financial_assistant.retry import call_with_retries
 from financial_assistant.schemas import ResearchOutput
 from financial_assistant.tools.web_search import search_web
 
@@ -61,7 +62,6 @@ def prepare_search_results(
 MAX_FINDINGS = 5
 MAX_FINDING_SUMMARY_CHARS = 500
 MAX_SUMMARY_CHARS = 800
-MAX_PARSE_ATTEMPTS = 2
 
 
 def sanitize_research_output(
@@ -123,6 +123,20 @@ def sanitize_research_output(
     )
 
 
+def research_unavailable(symbol: str, summary: str, reason: str) -> dict:
+    """Return a valid, empty research result and record the problem."""
+
+    return {
+        "research_findings": ResearchOutput(
+            symbol=symbol,
+            summary=summary,
+            findings=[],
+            limitations=[reason],
+        ).model_dump(),
+        "errors": [f"research_agent: {reason}"],
+    }
+
+
 def research_agent(state: dict) -> dict:
     """Research recent financial news and return validated structured findings."""
 
@@ -134,7 +148,19 @@ def research_agent(state: dict) -> dict:
         f"Research question: {user_query}"
     )
 
-    raw_results = search_web(query=query, max_results=5)
+    try:
+        raw_results = call_with_retries(
+            search_web,
+            query=query,
+            max_results=5,
+        )
+    except RuntimeError as exc:
+        return research_unavailable(
+            symbol,
+            "News research is unavailable.",
+            f"Web search failed: {exc}",
+        )
+
     search_results = prepare_search_results(raw_results)
 
     if not search_results:
@@ -171,40 +197,20 @@ def research_agent(state: dict) -> dict:
         ),
     ]
 
-    parsed_output = None
-    last_error = None
-
-    for _ in range(MAX_PARSE_ATTEMPTS):
-        response = model.invoke(messages)
-
-        try:
-            parsed_output = parser.parse(response.content)
-            break
-        except (ValidationError, ValueError) as exc:
-            last_error = exc
-            messages = messages + [
-                response,
-                HumanMessage(
-                    content=(
-                        "Your previous answer could not be parsed: "
-                        f"{exc}\nReturn only valid JSON that follows the "
-                        "format instructions."
-                    )
-                ),
-            ]
-
-    if parsed_output is None:
-        return {
-            "research_findings": ResearchOutput(
-                symbol=symbol,
-                summary="News research could not be completed.",
-                findings=[],
-                limitations=[
-                    "The research output could not be parsed "
-                    f"({type(last_error).__name__})."
-                ],
-            ).model_dump()
-        }
+    try:
+        parsed_output = invoke_and_parse(model, messages, parser)
+    except ValueError as exc:
+        return research_unavailable(
+            symbol,
+            "News research could not be completed.",
+            f"The research output could not be parsed ({type(exc).__name__}).",
+        )
+    except Exception as exc:
+        return research_unavailable(
+            symbol,
+            "News research could not be completed.",
+            f"The research model call failed: {exc}",
+        )
 
     parsed_output = sanitize_research_output(
         parsed_output,

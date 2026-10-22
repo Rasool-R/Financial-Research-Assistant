@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -31,4 +33,24 @@ class ResearchOutput(BaseModel):
     limitations: list[str] = Field(
         default_factory=list,
         description="Important research limitations",
+    )
+
+
+class ReviewResult(BaseModel):
+    """Structured verdict produced by the reviewer agent."""
+
+    verdict: Literal["PASS", "NEEDS_REVISION"] = Field(
+        description="NEEDS_REVISION if there is at least one critical issue",
+    )
+    critical_issues: list[str] = Field(
+        default_factory=list,
+        description="Material factual errors; empty list if none",
+    )
+    other_issues: list[str] = Field(
+        default_factory=list,
+        description="Minor problems; empty list if none",
+    )
+    recommendations: list[str] = Field(
+        default_factory=list,
+        description="Specific improvements; empty list if none",
     )

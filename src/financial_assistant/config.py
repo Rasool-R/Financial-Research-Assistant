@@ -5,6 +5,9 @@ from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
+# Maximum number of report revisions requested by the reviewer.
+MAX_REVISIONS = int(os.getenv("MAX_REVISIONS", "2"))
+
 
 def get_model() -> ChatOpenAI:
     api_key = os.getenv("OPENAI_API_KEY")

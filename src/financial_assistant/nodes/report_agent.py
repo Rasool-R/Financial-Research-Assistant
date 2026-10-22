@@ -22,6 +22,11 @@ Rules:
 - Identify important data limitations.
 - If data_quality.is_stale is true, state clearly that the prices may not
   be live and mention data_quality.note in Risks and Limitations.
+- If pipeline_warnings is not empty, mention them in Risks and Limitations.
+- If previous_report and reviewer_feedback are provided, revise
+  previous_report: fix every critical issue and apply the recommendations
+  using only the supplied evidence. Remove any claim the evidence does not
+  support. Return the complete revised report, not a list of changes.
 - Avoid repeating information across sections.
 - Keep the report under 600 words.
 
@@ -121,7 +126,24 @@ def report_agent(state: dict) -> dict:
             1800,
         ),
         "web_research": compact_news,
+        "pipeline_warnings": state.get("errors", []),
     }
+
+    # When the reviewer asked for changes, the writer sees the previous
+    # draft together with the review instead of starting from scratch.
+    review = state.get("review") or {}
+    previous_report = state.get("final_report")
+    is_revision = bool(previous_report) and (
+        review.get("verdict") == "NEEDS_REVISION"
+    )
+
+    if is_revision:
+        evidence["previous_report"] = limit_text(str(previous_report), 6000)
+        evidence["reviewer_feedback"] = {
+            "critical_issues": review.get("critical_issues", []),
+            "other_issues": review.get("other_issues", []),
+            "recommendations": review.get("recommendations", []),
+        }
 
     model = get_model()
 
@@ -134,4 +156,9 @@ def report_agent(state: dict) -> dict:
         )),
     ])
 
-    return {"final_report": response.content}
+    return {
+        "final_report": response.content,
+        "revision_count": (
+            state.get("revision_count", 0) + 1 if is_revision else 0
+        ),
+    }
