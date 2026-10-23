@@ -88,4 +88,29 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         result["macd"] - result["macd_signal"]
     )
 
+    # Average True Range (ATR) with Wilder smoothing
+    previous_close = close.shift(1)
+
+    true_range = pd.concat(
+        [
+            result["high"] - result["low"],
+            (result["high"] - previous_close).abs(),
+            (result["low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    result["atr_14"] = true_range.ewm(
+        alpha=1 / 14,
+        adjust=False,
+        min_periods=14,
+    ).mean()
+
+    # Bollinger Bands (20 periods, 2 population standard deviations)
+    rolling_std = close.rolling(window=20).std(ddof=0)
+
+    result["bb_middle"] = result["sma_20"]
+    result["bb_upper"] = result["sma_20"] + 2 * rolling_std
+    result["bb_lower"] = result["sma_20"] - 2 * rolling_std
+
     return result

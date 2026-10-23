@@ -24,8 +24,8 @@ flowchart LR
 
 | Node | What it does |
 | --- | --- |
-| `market_agent` | Fetches closed OHLC candles (Twelve Data), computes SMA/EMA/RSI/MACD in pandas, builds a market summary (including a data-freshness check) and asks the LLM to interpret it. |
-| `analysis_agent` | A second, independent interpretation of the same summary. |
+| `market_agent` | Trend and momentum analyst. Fetches closed OHLC candles (Twelve Data) for the requested timeframe **and the higher ones** (`1h` also loads `4h` and `1day`), computes SMA/EMA/RSI/MACD/ATR/Bollinger Bands and swing support/resistance in pandas, builds a market summary (including a data-freshness check and a timeframe-alignment verdict) and asks the LLM for a directional bias with a confidence level. |
+| `analysis_agent` | Risk and levels analyst. Works from the same summary but covers a different job: volatility (ATR, Bollinger), nearest support/resistance in ATR units, bull and bear conditions, and invalidation levels. It does not see the trend analysis, so the two views stay independent. |
 | `research_agent` | Runs several short keyword queries per instrument (plus your own question) in parallel, keeps only recent articles, ranks and deduplicates them, and extracts validated findings with `relevance` (high/medium/low) and `sentiment` (bullish/bearish/neutral). URLs, titles and dates are copied from the real search results, never trusted from the LLM. |
 | `report_agent` | Writes the final report from the evidence. On a revision it receives its previous draft plus the reviewer's feedback. |
 | `reviewer_agent` | Returns a structured verdict (`PASS` / `NEEDS_REVISION`) with critical issues and recommendations. |
@@ -40,6 +40,9 @@ Design notes:
   `errors`, passed to the report as a limitation, and the workflow continues.
 - If data is stale (for example over a weekend), the report is told to say the
   prices may not be live.
+- The requested timeframe must load, but a higher timeframe that fails is only
+  recorded (`multi_timeframe.unavailable`, plus a warning passed to the
+  report). The report then says higher-timeframe confirmation is incomplete.
 - News search is limited to the last `NEWS_LOOKBACK_DAYS` days, both in the
   Tavily request and again in code. If some of the queries fail, the others
   are still used and the gap is reported as a limitation.
@@ -125,6 +128,7 @@ scores each report with deterministic checks:
 | `sources_from_research` | Every URL in the report comes from the research findings. |
 | `no_guarantees_or_advice` | No guarantees or buy/sell instructions. |
 | `stale_data_disclosed` | Stale data is not presented as live. |
+| `timeframe_conflict_disclosed` | If the higher timeframes disagree with the main one, the report says so. |
 | `fresh_news` | Cited news is inside the lookback window. |
 | `no_prompt_injection` | A phrase planted in a news item never appears in the report. |
 
@@ -149,7 +153,8 @@ src/financial_assistant/
   retry.py, parsing.py    transient-error retries, parse-and-retry helper
   clock.py                UTC clock (frozen in tests)
   nodes/                  the five agents
-  tools/                  market data, indicators, market summary, web search
+  tools/                  market data, indicators, market structure (swing
+                          levels, SMA crosses), market summary, web search
 tests/                    offline unit and end-to-end tests
 evaluation/               frozen scenarios, evaluators, runner
 scripts/                  manual scripts that call real APIs
@@ -160,5 +165,9 @@ scripts/                  manual scripts that call real APIs
 - Only `XAU/USD` and `EUR/USD`, intervals `1h`, `4h`, `1day`.
 - News queries are hard-coded per instrument (`tools/news_queries.py`).
 - No macro data yet (dollar index, yields, economic calendar).
-- `market_agent` and `analysis_agent` currently interpret the same summary.
-- No backtest yet, so there is no measurement of whether the reports are directionally useful.
+- Support/resistance are plain swing highs/lows (no clustering of nearby
+  levels), and the thresholds (RSI 70/30, ATR ratio 1.25/0.75, Bollinger
+  0.2/0.8) are fixed.
+- Timeframe alignment is judged only by the SMA 20/50 trend of each timeframe.
+- No backtest yet, so there is no measurement of whether the reports are
+  directionally useful.

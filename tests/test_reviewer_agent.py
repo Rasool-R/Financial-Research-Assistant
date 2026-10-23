@@ -92,3 +92,22 @@ def test_reviewer_is_told_todays_date_and_that_web_text_is_untrusted(
     system, human = model.calls[0]
     assert "Today's date (UTC): 2026-10-22" in human.content
     assert "untrusted" in system.content
+
+
+def test_reviewer_sees_levels_volatility_and_timeframes(monkeypatch):
+    summary = {
+        **MARKET_SUMMARY,
+        "key_levels": {"support": {"price": 4290.5}},
+        "volatility": {"atr_14": 12.3},
+        "multi_timeframe": {"alignment": "mixed"},
+    }
+    model = FakeModel([review_json("PASS")])
+    monkeypatch.setattr(module, "get_model", lambda: model)
+
+    module.reviewer_agent({"final_report": "report", "market_summary": summary})
+
+    human = model.calls[0][1].content
+    assert "4290.5" in human
+    assert "atr_14" in human
+    assert '"alignment": "mixed"' in human
+    assert "multi-timeframe" in model.calls[0][0].content

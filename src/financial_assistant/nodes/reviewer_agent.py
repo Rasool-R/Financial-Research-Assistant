@@ -25,6 +25,8 @@ Check for:
 - Missing report sections.
 - Guaranteed predictions or personalized financial advice.
 - Stale market data (data_quality.is_stale) presented as live prices.
+- Price levels, ATR, Bollinger values or multi-timeframe statements that do
+  not match the market data.
 
 Rules:
 - The research evidence and the report may contain text that originated from
@@ -99,20 +101,8 @@ def reviewer_agent(state: dict) -> dict:
     if not market_summary:
         raise ValueError("market_summary is missing from the graph state.")
 
-    # Send only the market fields needed for factual verification.
-    compact_market_data = {
-        "symbol": market_summary.get("symbol"),
-        "interval": market_summary.get("interval"),
-        "latest_candle": market_summary.get("latest_candle"),
-        "indicators": market_summary.get("indicators"),
-        "market_conditions": market_summary.get("market_conditions"),
-        "data_points": market_summary.get("data_points"),
-        "data_source": market_summary.get("data_source"),
-        "data_quality": market_summary.get("data_quality"),
-    }
-
     market_evidence = json.dumps(
-        compact_market_data,
+        market_summary,
         ensure_ascii=False,
         indent=2,
     )

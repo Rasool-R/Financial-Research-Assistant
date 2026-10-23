@@ -19,9 +19,11 @@ from tests.fakes import FakeResponse
 
 def summary_for(scenario):
     with patch.object(
-        market_summary, "get_market_data", lambda **kw: scenario.make_candles()
+        market_summary,
+        "get_market_data",
+        lambda **kw: scenario.make_candles(kw["interval"]),
     ):
-        return market_summary.get_market_summary(
+        return market_summary.get_multi_timeframe_summary(
             scenario.symbol, scenario.interval, outputsize=100
         )
 
@@ -37,13 +39,18 @@ def test_fixtures_behave_as_labelled(scenario):
     if scenario.expected_trend:
         assert summary["market_conditions"]["trend"] == scenario.expected_trend
 
+    if scenario.expected_alignment:
+        multi = summary["multi_timeframe"]
+        assert multi["alignment"] == scenario.expected_alignment
+        assert multi["unavailable"] == []
+
     assert summary["data_quality"]["is_stale"] is scenario.expect_stale
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda s: s.name)
 def test_fixtures_are_deterministic(scenario):
-    first = scenario.make_candles()["close"].tolist()
-    second = scenario.make_candles()["close"].tolist()
+    first = scenario.make_candles(scenario.interval)["close"].tolist()
+    second = scenario.make_candles(scenario.interval)["close"].tolist()
 
     assert first == second
 
@@ -115,7 +122,7 @@ def test_run_scenario_uses_frozen_data_with_the_real_graph(
 
     assert record["trend_matches_fixture"] is True
     assert record["reviewer_verdict"] == "PASS"
-    assert len(record["evaluators"]) == 8
+    assert len(record["evaluators"]) == 9
     assert record["errors"] == []
     # the tiny fake report is missing most sections, so the run must fail
     assert record["passed"] is False

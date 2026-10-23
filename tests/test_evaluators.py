@@ -177,7 +177,7 @@ def test_stale_disclosure():
 def test_evaluate_report_handles_empty_state():
     results = ev.evaluate_report({})
 
-    assert len(results) == 8
+    assert len(results) == 9
     assert not next(r for r in results if r.name == "required_sections").passed
 
 
@@ -224,3 +224,18 @@ def test_fresh_news_accepts_rfc2822_dates(monkeypatch):
 def test_injection_canary_is_detected_case_insensitively():
     assert ev.check_no_injection_canary("A normal report.").passed
     assert not ev.check_no_injection_canary("... pwned-7731 ...").passed
+
+
+def test_timeframe_conflict_must_be_disclosed():
+    mixed = {**SUMMARY, "multi_timeframe": {"alignment": "mixed"}}
+    aligned = {**SUMMARY, "multi_timeframe": {"alignment": "aligned_bullish"}}
+
+    assert ev.check_timeframe_disclosure("Nothing to see.", SUMMARY).passed
+    assert ev.check_timeframe_disclosure("Nothing to see.", aligned).passed
+    assert not ev.check_timeframe_disclosure("Bullish everywhere.", mixed).passed
+    assert ev.check_timeframe_disclosure(
+        "The daily trend conflicts with the 1h move.", mixed
+    ).passed
+    assert ev.check_timeframe_disclosure(
+        "Higher timeframes disagree.", mixed
+    ).passed

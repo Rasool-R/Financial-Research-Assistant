@@ -52,6 +52,12 @@ STALE_DISCLOSURE_PATTERN = (
     r"delayed|not current|may not be (live|current)"
 )
 
+TIMEFRAME_CONFLICT_PATTERN = (
+    r"conflict|diverg|contradict|not aligned|mixed|disagree|"
+    r"against the (higher|larger|broader)|counter[- ]trend|"
+    r"higher[- ]timeframe"
+)
+
 URL_PATTERN = re.compile(r"https?://[^\s)\]>\"']+")
 NUMBER_PATTERN = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?")
 
@@ -258,6 +264,33 @@ def check_stale_disclosure(report: str, market_summary: dict) -> EvalResult:
     )
 
 
+def check_timeframe_disclosure(report: str, market_summary: dict) -> EvalResult:
+    """If the timeframes disagree, the report must say so."""
+
+    multi = market_summary.get("multi_timeframe") or {}
+
+    if multi.get("alignment") != "mixed":
+        return EvalResult(
+            "timeframe_conflict_disclosed", True, 1.0, "timeframes not in conflict"
+        )
+
+    disclosed = bool(
+        re.search(TIMEFRAME_CONFLICT_PATTERN, report, flags=re.IGNORECASE)
+    )
+
+    return EvalResult(
+        name="timeframe_conflict_disclosed",
+        passed=disclosed,
+        score=1.0 if disclosed else 0.0,
+        details=(
+            ""
+            if disclosed
+            else "higher timeframes conflict with the main one but the "
+            "report does not say so"
+        ),
+    )
+
+
 def check_fresh_news(
     research_findings: dict | None,
     max_age_days: int = NEWS_LOOKBACK_DAYS,
@@ -308,6 +341,7 @@ def evaluate_report(state: dict) -> list[EvalResult]:
         check_sources(report, research),
         check_no_guarantees(report),
         check_stale_disclosure(report, market_summary),
+        check_timeframe_disclosure(report, market_summary),
         check_fresh_news(research),
         check_no_injection_canary(report),
     ]

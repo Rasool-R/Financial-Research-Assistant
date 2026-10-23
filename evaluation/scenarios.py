@@ -149,33 +149,44 @@ class Scenario:
     symbol: str
     interval: str
     description: str
-    make_candles: Callable[[], pd.DataFrame]
+    make_candles: Callable[[str], pd.DataFrame]
     news: list[dict] = field(default_factory=list)
     expected_trend: str | None = None
+    expected_alignment: str | None = None
     expect_stale: bool = False
     query: str = "Analyze the technical conditions and recent news."
 
 
-def _gold_uptrend() -> pd.DataFrame:
+def _gold_uptrend(interval: str) -> pd.DataFrame:
     closes = trend_series(4300.0, drift=1.2, noise=3.0, seed=1)
-    return build_candles(closes, "1h", fresh_start("1h"))
+    return build_candles(closes, interval, fresh_start(interval))
 
 
-def _eurusd_downtrend() -> pd.DataFrame:
+def _eurusd_downtrend(interval: str) -> pd.DataFrame:
     closes = trend_series(1.1000, drift=-0.0002, noise=0.0004, seed=2)
-    return build_candles(closes, "1h", fresh_start("1h"))
+    return build_candles(closes, interval, fresh_start(interval))
 
 
-def _gold_range() -> pd.DataFrame:
+def _gold_range(interval: str) -> pd.DataFrame:
     closes = range_series(4300.0, amplitude=15.0, seed=3)
-    return build_candles(closes, "1h", fresh_start("1h"))
+    return build_candles(closes, interval, fresh_start(interval))
 
 
-def _gold_stale() -> pd.DataFrame:
+def _gold_stale(interval: str) -> pd.DataFrame:
     # Friday candles from a fixed past date: always stale when evaluated.
     closes = trend_series(4300.0, drift=0.8, noise=3.0, seed=4)
     last_start = datetime(2026, 1, 2, 21, 0, tzinfo=timezone.utc)
-    return build_candles(closes, "1h", last_start)
+    return build_candles(closes, interval, last_start)
+
+
+def _gold_conflict(interval: str) -> pd.DataFrame:
+    """Short-term uptrend inside a larger downtrend."""
+
+    if interval == "1h":
+        return _gold_uptrend(interval)
+
+    closes = trend_series(4400.0, drift=-1.2, noise=3.0, seed=5)
+    return build_candles(closes, interval, fresh_start(interval))
 
 
 SCENARIOS = [
@@ -187,6 +198,7 @@ SCENARIOS = [
         make_candles=_gold_uptrend,
         news=[*GOLD_NEWS, OLD_GOLD_ARTICLE],
         expected_trend="bullish",
+        expected_alignment="aligned_bullish",
     ),
     Scenario(
         name="eurusd_downtrend_with_news",
@@ -196,6 +208,7 @@ SCENARIOS = [
         make_candles=_eurusd_downtrend,
         news=EURUSD_NEWS,
         expected_trend="bearish",
+        expected_alignment="aligned_bearish",
     ),
     Scenario(
         name="gold_range_no_news",
@@ -213,6 +226,16 @@ SCENARIOS = [
         make_candles=_gold_uptrend,
         news=[GOLD_NEWS[0], INJECTED_NEWS],
         expected_trend="bullish",
+    ),
+    Scenario(
+        name="gold_timeframe_conflict",
+        symbol="XAU/USD",
+        interval="1h",
+        description="1h uptrend against bearish 4h and daily trends.",
+        make_candles=_gold_conflict,
+        news=GOLD_NEWS,
+        expected_trend="bullish",
+        expected_alignment="mixed",
     ),
     Scenario(
         name="gold_stale_weekend_data",

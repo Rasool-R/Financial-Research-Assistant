@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -6,6 +7,14 @@ import pandas as pd
 from financial_assistant.tools.market_data import (
     INTERVAL_DELTAS,
     get_market_data,
+)
+from financial_assistant.tools.market_structure import (
+    CANDLES_PER_24H,
+    describe_bollinger,
+    describe_volatility,
+    key_levels,
+    last_sma_cross,
+    percent_change,
 )
 from financial_assistant.tools.technical_indicators import (
     add_technical_indicators,
@@ -23,7 +32,18 @@ INDICATOR_COLUMNS = [
     "macd",
     "macd_signal",
     "macd_histogram",
+    "atr_14",
+    "bb_upper",
+    "bb_middle",
+    "bb_lower",
 ]
+
+# Timeframes used to confirm (or contradict) the requested one.
+HIGHER_TIMEFRAMES = {
+    "1h": ["4h", "1day"],
+    "4h": ["1day"],
+    "1day": [],
+}
 
 
 def build_data_quality(
@@ -136,6 +156,18 @@ def get_market_summary(
         "macd_histogram": float(latest["macd_histogram"]),
     }
 
+
+    close = float(latest["close"])
+    atr = float(latest["atr_14"])
+
+    price_action = {
+        "change_24h_percent": percent_change(df, CANDLES_PER_24H[interval]),
+        "last_sma_cross": last_sma_cross(df),
+        "close_vs_sma_20_atr": (
+            (close - float(latest["sma_20"])) / atr if atr > 0 else None
+        ),
+    }
+
     price_change = None
 
     if previous is not None and previous["close"] != 0:
@@ -149,6 +181,10 @@ def get_market_summary(
         "interval": interval,
         "latest_candle": latest_candle,
         "indicators": indicators,
+        "volatility": describe_volatility(df, atr, close),
+        "bollinger": describe_bollinger(latest),
+        "key_levels": key_levels(df, atr),
+        "price_action": price_action,
         "market_conditions": {
             "trend": trend,
             "rsi_condition": rsi_condition,
@@ -162,4 +198,89 @@ def get_market_summary(
         "data_points": len(df),
         "data_source": "Twelve Data",
         "data_quality": data_quality,
-    }
+    }
+
+
+def summarize_timeframe(summary: dict[str, Any]) -> dict[str, Any]:
+    """Compact view of another timeframe's summary."""
+
+    conditions = summary["market_conditions"]
+
+    return {
+        "interval": summary["interval"],
+        "trend": conditions["trend"],
+        "rsi_condition": conditions["rsi_condition"],
+        "macd_momentum": conditions["macd_momentum"],
+        "rsi_14": summary["indicators"]["rsi_14"],
+        "close": summary["latest_candle"]["close"],
+        "sma_20": summary["indicators"]["sma_20"],
+        "sma_50": summary["indicators"]["sma_50"],
+        "is_stale": summary["data_quality"]["is_stale"],
+    }
+
+
+def timeframe_alignment(main_trend: str, higher: dict[str, dict]) -> str:
+    """aligned_bullish / aligned_bearish / mixed / single_timeframe."""
+
+    if not higher:
+        return "single_timeframe"
+
+    trends = {main_trend, *(item["trend"] for item in higher.values())}
+
+    if trends == {"bullish"}:
+        return "aligned_bullish"
+
+    if trends == {"bearish"}:
+        return "aligned_bearish"
+
+    return "mixed"
+
+
+def get_multi_timeframe_summary(
+    symbol: str,
+    interval: str = "1h",
+    outputsize: int = 100,
+) -> dict[str, Any]:
+    """Market summary for ``interval`` plus higher-timeframe confirmation.
+
+    The requested timeframe must succeed. A higher timeframe that cannot be
+    loaded is listed under ``multi_timeframe.unavailable`` instead of
+    failing the whole summary.
+    """
+
+    summary = get_market_summary(symbol, interval, outputsize)
+
+    timeframes = HIGHER_TIMEFRAMES.get(interval, [])
+    higher: dict[str, dict] = {}
+    unavailable: list[dict[str, str]] = []
+
+    def load(timeframe: str):
+        try:
+            return timeframe, get_market_summary(
+                symbol, timeframe, outputsize
+            ), None
+        except (RuntimeError, ValueError) as exc:
+            return timeframe, None, str(exc)
+
+    if timeframes:
+        with ThreadPoolExecutor(max_workers=len(timeframes)) as pool:
+            outcomes = list(pool.map(load, timeframes))
+
+        for timeframe, result, error in outcomes:
+            if error is not None:
+                unavailable.append({"interval": timeframe, "error": error})
+            else:
+                higher[timeframe] = summarize_timeframe(result)
+
+    trend = summary["market_conditions"]["trend"]
+
+    summary["multi_timeframe"] = {
+        "higher_timeframes": higher,
+        "alignment": timeframe_alignment(trend, higher),
+        "conflicting_timeframes": [
+            name for name, item in higher.items() if item["trend"] != trend
+        ],
+        "unavailable": unavailable,
+    }
+
+    return summary

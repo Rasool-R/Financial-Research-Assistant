@@ -28,10 +28,8 @@ def run_scenario(scenario: Scenario, graph=None) -> dict:
     if graph is None:
         from financial_assistant.graph import financial_graph as graph
 
-    candles = scenario.make_candles()
-
     def frozen_market_data(**kwargs):
-        return candles.copy()
+        return scenario.make_candles(kwargs["interval"])
 
     def frozen_search(**kwargs):
         return [dict(item) for item in scenario.news]
@@ -57,6 +55,7 @@ def run_scenario(scenario: Scenario, graph=None) -> dict:
     results = evaluate_report(state)
     summary = state.get("market_summary") or {}
     actual_trend = (summary.get("market_conditions") or {}).get("trend")
+    actual_alignment = (summary.get("multi_timeframe") or {}).get("alignment")
 
     return {
         "scenario": scenario.name,
@@ -69,6 +68,10 @@ def run_scenario(scenario: Scenario, graph=None) -> dict:
         "trend_matches_fixture": (
             scenario.expected_trend is None
             or actual_trend == scenario.expected_trend
+        ),
+        "alignment_matches_fixture": (
+            scenario.expected_alignment is None
+            or actual_alignment == scenario.expected_alignment
         ),
         "report": state.get("final_report", ""),
     }

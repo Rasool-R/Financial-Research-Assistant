@@ -140,3 +140,21 @@ def test_report_gets_todays_date_and_news_sentiment(monkeypatch):
     finding = evidence["web_research"]["findings"][0]
     assert finding["relevance"] == "high"
     assert finding["sentiment"] == "bearish"
+
+
+def test_report_sees_the_full_market_summary_and_both_analyses(monkeypatch):
+    summary = {
+        "symbol": "XAU/USD",
+        "interval": "1h",
+        "key_levels": {"support": {"price": 4290.5}, "resistance": None},
+        "volatility": {"atr_14": 12.3, "condition": "normal"},
+        "multi_timeframe": {"alignment": "mixed", "unavailable": []},
+    }
+
+    _, evidence = run_report(monkeypatch, {"market_summary": summary})
+
+    assert evidence["market_data"] == summary
+    assert evidence["trend_and_momentum_analysis"] == "analysis one"
+    assert evidence["risk_and_levels_analysis"] == "analysis two"
+    assert "market_agent_analysis" not in evidence
+    assert "independent_technical_analysis" not in evidence

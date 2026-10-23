@@ -68,9 +68,9 @@ class RoutingModel:
     def invoke(self, messages):
         system = messages[0].content
 
-        if "financial market research analyst" in system:
+        if "trend and momentum analyst" in system:
             return FakeResponse("market analysis")
-        if "independent technical analysis agent" in system:
+        if "risk and levels analyst" in system:
             return FakeResponse("independent analysis")
         if "financial news research agent" in system:
             return FakeResponse(RESEARCH_JSON)
@@ -84,7 +84,7 @@ class RoutingModel:
         raise AssertionError(f"unexpected agent: {system[:60]}")
 
 
-def run_real_graph(monkeypatch, model, search=None):
+def run_real_graph(monkeypatch, model, search=None, market_data=None):
     for module in (
         market_agent,
         analysis_agent,
@@ -96,7 +96,9 @@ def run_real_graph(monkeypatch, model, search=None):
 
     monkeypatch.setattr(research_agent, "utc_now", lambda: FROZEN_NOW)
     monkeypatch.setattr(
-        market_summary, "get_market_data", lambda **kw: make_candles(100)
+        market_summary,
+        "get_market_data",
+        market_data or (lambda **kw: make_candles(100)),
     )
     monkeypatch.setattr(
         research_agent,
@@ -134,6 +136,12 @@ def test_full_workflow_with_one_revision(monkeypatch):
     assert second["reviewer_feedback"]["critical_issues"] == [
         "RSI value is wrong"
     ]
+    assert first["market_data"]["multi_timeframe"]["alignment"] == (
+        "aligned_bullish"
+    )
+    assert first["market_data"]["key_levels"]["lookback_candles"] == 60
+    assert "trend_and_momentum_analysis" in first
+    assert "risk_and_levels_analysis" in first
     assert first["web_research"]["findings"][0]["source_url"] == (
         "https://example.com/gold"
     )
@@ -150,4 +158,22 @@ def test_full_workflow_survives_search_outage(monkeypatch):
     assert result["final_report"] == "report v1"
     assert any("Web search failed" in error for error in result["errors"])
     # the report writer was told about the problem
+    assert model.report_inputs[0]["pipeline_warnings"] == result["errors"]
+
+
+def test_full_workflow_survives_a_failing_higher_timeframe(monkeypatch):
+    def market_data(**kwargs):
+        if kwargs["interval"] == "4h":
+            raise RuntimeError("Twelve Data rate limit")
+        return make_candles(100)
+
+    model = RoutingModel([review("PASS")])
+
+    result = run_real_graph(monkeypatch, model, market_data=market_data)
+
+    assert result["final_report"] == "report v1"
+    unavailable = result["market_summary"]["multi_timeframe"]["unavailable"]
+    assert [item["interval"] for item in unavailable] == ["4h"]
+    assert any("4h data unavailable" in e for e in result["errors"])
+    # the report writer was told that confirmation is incomplete
     assert model.report_inputs[0]["pipeline_warnings"] == result["errors"]
