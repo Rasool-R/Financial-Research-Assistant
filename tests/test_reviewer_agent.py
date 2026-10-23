@@ -74,3 +74,21 @@ def test_format_review_lists_empty_sections_as_none():
     )
 
     assert text.count("- None") == 3
+
+
+def test_reviewer_is_told_todays_date_and_that_web_text_is_untrusted(
+    monkeypatch,
+):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(
+        module,
+        "utc_now",
+        lambda: datetime(2026, 10, 22, tzinfo=timezone.utc),
+    )
+
+    _, model = run_reviewer(monkeypatch, [review_json("PASS")])
+
+    system, human = model.calls[0]
+    assert "Today's date (UTC): 2026-10-22" in human.content
+    assert "untrusted" in system.content

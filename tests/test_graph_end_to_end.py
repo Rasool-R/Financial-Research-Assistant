@@ -1,6 +1,7 @@
 """Run the real graph and real nodes; only network access is faked."""
 
 import json
+from datetime import datetime, timezone
 
 from financial_assistant import graph as graph_module
 from financial_assistant.nodes import (
@@ -13,6 +14,10 @@ from financial_assistant.nodes import (
 from financial_assistant.tools import market_summary
 from tests.fakes import FakeResponse
 from tests.test_market_data import make_candles
+
+# The fixture news is dated 2026-10-20; freeze "now" so the recency filter
+# keeps behaving the same no matter when the tests run.
+FROZEN_NOW = datetime(2026, 10, 22, 12, tzinfo=timezone.utc)
 
 SEARCH_RESULTS = [
     {
@@ -33,6 +38,7 @@ RESEARCH_JSON = json.dumps(
                 "published_date": "2026-10-20",
                 "source_url": "https://example.com/gold",
                 "relevance": "high",
+                "sentiment": "bullish",
                 "summary": "Gold rose.",
             }
         ],
@@ -88,6 +94,7 @@ def run_real_graph(monkeypatch, model, search=None):
     ):
         monkeypatch.setattr(module, "get_model", lambda: model)
 
+    monkeypatch.setattr(research_agent, "utc_now", lambda: FROZEN_NOW)
     monkeypatch.setattr(
         market_summary, "get_market_data", lambda **kw: make_candles(100)
     )

@@ -12,8 +12,14 @@ class ResearchFinding(BaseModel):
         description="Publication date exactly as provided by the source",
     )
     source_url: str = Field(description="Exact source URL")
-    relevance: str = Field(
-        description="Relevance to the requested financial instrument",
+    relevance: Literal["high", "medium", "low"] = Field(
+        description="How directly the article affects the instrument",
+    )
+    sentiment: Literal["bullish", "bearish", "neutral"] = Field(
+        description=(
+            "Direction the article itself says the news points for the "
+            "instrument's price; neutral if unclear or mixed"
+        ),
     )
     summary: str = Field(
         description="Concise summary grounded in the article (max 500 characters)",

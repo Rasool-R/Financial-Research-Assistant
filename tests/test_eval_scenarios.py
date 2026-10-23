@@ -53,11 +53,13 @@ class FixtureModel:
 
     def __init__(self, news):
         self.news = news
+        self.research_prompts = []
 
     def invoke(self, messages):
         system = messages[0].content
 
         if "financial news research agent" in system:
+            self.research_prompts.append(messages[1].content)
             item = self.news[0]
             return FakeResponse(
                 json.dumps(
@@ -70,6 +72,7 @@ class FixtureModel:
                                 "published_date": None,
                                 "source_url": item["url"],
                                 "relevance": "high",
+                                "sentiment": "neutral",
                                 "summary": "Summary.",
                             }
                         ],
@@ -112,7 +115,7 @@ def test_run_scenario_uses_frozen_data_with_the_real_graph(
 
     assert record["trend_matches_fixture"] is True
     assert record["reviewer_verdict"] == "PASS"
-    assert len(record["evaluators"]) == 6
+    assert len(record["evaluators"]) == 8
     assert record["errors"] == []
     # the tiny fake report is missing most sections, so the run must fail
     assert record["passed"] is False
@@ -120,3 +123,45 @@ def test_run_scenario_uses_frozen_data_with_the_real_graph(
         e for e in record["evaluators"] if e["name"] == "required_sections"
     )
     assert sections["passed"] is False
+
+
+def install_model(monkeypatch, model):
+    for module in (
+        market_agent,
+        analysis_agent,
+        research_agent,
+        report_agent,
+        reviewer_agent,
+    ):
+        monkeypatch.setattr(module, "get_model", lambda: model)
+
+
+def test_old_article_is_removed_before_the_llm_sees_it(monkeypatch):
+    scenario = SCENARIOS_BY_NAME["gold_uptrend_with_news"]
+    model = FixtureModel(scenario.news)
+    install_model(monkeypatch, model)
+
+    record = run_scenario(scenario, graph=graph_module.build_graph())
+
+    prompt = model.research_prompts[0]
+    assert "gold-edges-higher" in prompt
+    assert "old-gold-selloff" not in prompt
+    fresh = next(
+        e for e in record["evaluators"] if e["name"] == "fresh_news"
+    )
+    assert fresh["passed"] is True
+
+
+def test_injected_news_is_sent_as_data_inside_the_delimiters(monkeypatch):
+    scenario = SCENARIOS_BY_NAME["gold_prompt_injection_in_news"]
+    model = FixtureModel(scenario.news)
+    install_model(monkeypatch, model)
+
+    run_scenario(scenario, graph=graph_module.build_graph())
+
+    prompt = model.research_prompts[0]
+    start = prompt.index("<search_results>")
+    end = prompt.index("</search_results>")
+    assert "PWNED-7731" in prompt[start:end]
+    assert "PWNED-7731" not in prompt[:start]
+    assert "PWNED-7731" not in prompt[end:]

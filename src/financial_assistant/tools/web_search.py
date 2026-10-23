@@ -10,8 +10,12 @@ load_dotenv()
 def search_web(
     query: str,
     max_results: int = 5,
+    days: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Search the web and return concise source information."""
+    """Search recent news and return concise source information.
+
+    ``days`` limits results to articles published in the last N days.
+    """
 
     api_key = os.getenv("TAVILY_API_KEY")
 
@@ -26,15 +30,23 @@ def search_web(
     if not 1 <= max_results <= 10:
         raise ValueError("max_results must be between 1 and 10.")
 
+    if days is not None and days < 1:
+        raise ValueError("days must be at least 1.")
+
     client = TavilyClient(api_key=api_key)
 
+    search_kwargs: dict[str, Any] = {
+        "query": query,
+        "max_results": max_results,
+        "topic": "news",
+        "search_depth": "basic",
+    }
+
+    if days is not None:
+        search_kwargs["days"] = days
+
     try:
-        response = client.search(
-            query=query,
-            max_results=max_results,
-            topic="news",
-            search_depth="basic",
-        )
+        response = client.search(**search_kwargs)
     except Exception as exc:
         raise RuntimeError(
             f"Web search failed: {exc}"
@@ -49,6 +61,7 @@ def search_web(
                 "url": item.get("url", ""),
                 "content": item.get("content", ""),
                 "published_date": item.get("published_date"),
+                "score": item.get("score"),
             }
         )
 

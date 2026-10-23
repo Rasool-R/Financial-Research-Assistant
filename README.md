@@ -26,7 +26,7 @@ flowchart LR
 | --- | --- |
 | `market_agent` | Fetches closed OHLC candles (Twelve Data), computes SMA/EMA/RSI/MACD in pandas, builds a market summary (including a data-freshness check) and asks the LLM to interpret it. |
 | `analysis_agent` | A second, independent interpretation of the same summary. |
-| `research_agent` | Searches recent news (Tavily) and extracts validated, structured findings. URLs, titles and dates are copied from the real search results, never trusted from the LLM. |
+| `research_agent` | Runs several short keyword queries per instrument (plus your own question) in parallel, keeps only recent articles, ranks and deduplicates them, and extracts validated findings with `relevance` (high/medium/low) and `sentiment` (bullish/bearish/neutral). URLs, titles and dates are copied from the real search results, never trusted from the LLM. |
 | `report_agent` | Writes the final report from the evidence. On a revision it receives its previous draft plus the reviewer's feedback. |
 | `reviewer_agent` | Returns a structured verdict (`PASS` / `NEEDS_REVISION`) with critical issues and recommendations. |
 
@@ -40,6 +40,14 @@ Design notes:
   `errors`, passed to the report as a limitation, and the workflow continues.
 - If data is stale (for example over a weekend), the report is told to say the
   prices may not be live.
+- News search is limited to the last `NEWS_LOOKBACK_DAYS` days, both in the
+  Tavily request and again in code. If some of the queries fail, the others
+  are still used and the gap is reported as a limitation.
+- Web pages are untrusted input. Search results are passed to the LLM as JSON
+  inside `<search_results>` tags (a page cannot close the block), the agents
+  are told to treat them as data, and the LLM can never change URLs, titles or
+  dates. This lowers the risk of prompt injection but cannot remove it, so the
+  evaluation includes a scenario with a planted injection.
 
 ## Setup
 
@@ -60,6 +68,7 @@ cp .env.example .env             # then fill in your keys
 | `TWELVE_DATA_API_KEY` | yes | Market data. |
 | `TAVILY_API_KEY` | yes | News search. |
 | `MAX_REVISIONS` | no | Max reviewer-requested revisions (default `2`). |
+| `NEWS_LOOKBACK_DAYS` | no | Only use news from the last N days (default `7`). |
 | `LANGSMITH_*` | no | Optional tracing. |
 
 Check your LLM connection with `python scripts/check_model.py`.
@@ -116,6 +125,8 @@ scores each report with deterministic checks:
 | `sources_from_research` | Every URL in the report comes from the research findings. |
 | `no_guarantees_or_advice` | No guarantees or buy/sell instructions. |
 | `stale_data_disclosed` | Stale data is not presented as live. |
+| `fresh_news` | Cited news is inside the lookback window. |
+| `no_prompt_injection` | A phrase planted in a news item never appears in the report. |
 
 ```bash
 python -m evaluation.run_eval                      # all scenarios
@@ -136,6 +147,7 @@ src/financial_assistant/
   state.py, schemas.py    shared state and Pydantic schemas
   config.py               model factory and settings
   retry.py, parsing.py    transient-error retries, parse-and-retry helper
+  clock.py                UTC clock (frozen in tests)
   nodes/                  the five agents
   tools/                  market data, indicators, market summary, web search
 tests/                    offline unit and end-to-end tests
@@ -146,5 +158,7 @@ scripts/                  manual scripts that call real APIs
 ## Known limitations
 
 - Only `XAU/USD` and `EUR/USD`, intervals `1h`, `4h`, `1day`.
+- News queries are hard-coded per instrument (`tools/news_queries.py`).
+- No macro data yet (dollar index, yields, economic calendar).
 - `market_agent` and `analysis_agent` currently interpret the same summary.
 - No backtest yet, so there is no measurement of whether the reports are directionally useful.

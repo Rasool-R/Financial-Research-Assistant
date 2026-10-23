@@ -8,6 +8,9 @@ load_dotenv()
 # Maximum number of report revisions requested by the reviewer.
 MAX_REVISIONS = int(os.getenv("MAX_REVISIONS", "2"))
 
+# News older than this many days is not sent to the research agent.
+NEWS_LOOKBACK_DAYS = int(os.getenv("NEWS_LOOKBACK_DAYS", "7"))
+
 
 def get_model() -> ChatOpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
@@ -30,4 +33,4 @@ def get_model() -> ChatOpenAI:
         api_key=api_key,
         base_url=base_url,
         temperature=0,
-    )
+    )

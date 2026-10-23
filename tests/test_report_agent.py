@@ -106,3 +106,37 @@ def test_pipeline_warnings_are_passed_to_the_report(monkeypatch):
     assert evidence["pipeline_warnings"] == [
         "research_agent: Web search failed"
     ]
+
+
+def test_report_gets_todays_date_and_news_sentiment(monkeypatch):
+    from datetime import datetime, timezone
+
+    from financial_assistant.nodes import report_agent as module
+
+    monkeypatch.setattr(
+        module,
+        "utc_now",
+        lambda: datetime(2026, 10, 22, 23, 59, tzinfo=timezone.utc),
+    )
+    research = {
+        "symbol": "XAU/USD",
+        "summary": "s",
+        "findings": [
+            {
+                "title": "T",
+                "published_date": "2026-10-20",
+                "source_url": "https://example.com/a",
+                "relevance": "high",
+                "sentiment": "bearish",
+                "summary": "Gold fell.",
+            }
+        ],
+        "limitations": [],
+    }
+
+    _, evidence = run_report(monkeypatch, {"research_findings": research})
+
+    assert evidence["as_of"] == "2026-10-22"
+    finding = evidence["web_research"]["findings"][0]
+    assert finding["relevance"] == "high"
+    assert finding["sentiment"] == "bearish"

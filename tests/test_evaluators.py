@@ -177,5 +177,50 @@ def test_stale_disclosure():
 def test_evaluate_report_handles_empty_state():
     results = ev.evaluate_report({})
 
-    assert len(results) == 6
+    assert len(results) == 8
     assert not next(r for r in results if r.name == "required_sections").passed
+
+
+def test_fresh_news_flags_old_articles(monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(
+        ev, "utc_now", lambda: datetime(2026, 10, 22, tzinfo=timezone.utc)
+    )
+    fresh = {"findings": [{"source_url": "a", "published_date": "2026-10-20"}]}
+    old = {
+        "findings": [
+            {"source_url": "a", "published_date": "2026-10-20"},
+            {"source_url": "b", "published_date": "2026-09-01"},
+        ]
+    }
+    undated = {"findings": [{"source_url": "c", "published_date": None}]}
+
+    assert ev.check_fresh_news(fresh).passed
+    assert ev.check_fresh_news(undated).passed
+    result = ev.check_fresh_news(old)
+    assert not result.passed
+    assert "'b'" in result.details
+
+
+def test_fresh_news_accepts_rfc2822_dates(monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(
+        ev, "utc_now", lambda: datetime(2026, 10, 22, tzinfo=timezone.utc)
+    )
+    findings = {
+        "findings": [
+            {
+                "source_url": "a",
+                "published_date": "Tue, 20 Oct 2026 10:00:00 GMT",
+            }
+        ]
+    }
+
+    assert ev.check_fresh_news(findings).passed
+
+
+def test_injection_canary_is_detected_case_insensitively():
+    assert ev.check_no_injection_canary("A normal report.").passed
+    assert not ev.check_no_injection_canary("... pwned-7731 ...").passed
