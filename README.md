@@ -24,11 +24,11 @@ flowchart LR
 
 | Node | What it does |
 | --- | --- |
-| `market_agent` | Trend and momentum analyst. Fetches closed OHLC candles (Twelve Data) for the requested timeframe **and the higher ones** (`1h` also loads `4h` and `1day`), computes SMA/EMA/RSI/MACD/ATR/Bollinger Bands and swing support/resistance in pandas, builds a market summary (including a data-freshness check and a timeframe-alignment verdict) and asks the LLM for a directional bias with a confidence level. |
+| `market_agent` | Trend and momentum analyst. Fetches closed OHLC candles (Twelve Data) for the requested timeframe **and the higher ones** (`1h` also loads `4h` and `1day`), computes SMA/EMA/RSI/MACD/ATR/Bollinger Bands and swing support/resistance in pandas, builds a market summary (including a data-freshness check and a timeframe-alignment verdict) and asks the LLM for a directional bias with a confidence level. The answer ends with a machine-readable `FORECAST:` line that is parsed and logged for backtesting. |
 | `analysis_agent` | Risk and levels analyst. Works from the same summary but covers a different job: volatility (ATR, Bollinger), nearest support/resistance in ATR units, bull and bear conditions, and invalidation levels. It does not see the trend analysis, so the two views stay independent. |
 | `research_agent` | Runs several short keyword queries per instrument (plus your own question) in parallel, keeps only recent articles, ranks and deduplicates them, and extracts validated findings with `relevance` (high/medium/low) and `sentiment` (bullish/bearish/neutral). URLs, titles and dates are copied from the real search results, never trusted from the LLM. |
 | `report_agent` | Writes the final report from the evidence. On a revision it receives its previous draft plus the reviewer's feedback. |
-| `reviewer_agent` | Returns a structured verdict (`PASS` / `NEEDS_REVISION`) with critical issues and recommendations. |
+| `reviewer_agent` | Returns a structured verdict (`PASS` / `NEEDS_REVISION`) with critical issues and recommendations. Checks done in code (currently the word limit) are added to the LLM's findings and force a revision even if the LLM says `PASS`. |
 
 Design notes:
 
@@ -72,6 +72,7 @@ cp .env.example .env             # then fill in your keys
 | `TAVILY_API_KEY` | yes | News search. |
 | `MAX_REVISIONS` | no | Max reviewer-requested revisions (default `2`). |
 | `NEWS_LOOKBACK_DAYS` | no | Only use news from the last N days (default `7`). |
+| `FORECAST_LOG_PATH` | no | Where forecasts are logged for backtesting (default `data/forecasts.jsonl`). |
 | `LANGSMITH_*` | no | Optional tracing. |
 
 Check your LLM connection with `python scripts/check_model.py`.
@@ -86,6 +87,7 @@ financial-assistant --symbol EUR/USD --interval 4h
 financial-assistant --query "How does the dollar affect gold?" --show-review
 financial-assistant -o report.md                      # also save the report
 financial-assistant --json                            # full workflow state
+financial-assistant --no-log                          # do not log this forecast
 ```
 
 `python -m financial_assistant ...` works as well. Supported symbols and
@@ -123,12 +125,13 @@ scores each report with deterministic checks:
 | Check | Verifies |
 | --- | --- |
 | `required_sections` | All seven sections are present. |
-| `word_limit` | Report stays within 600 words. |
-| `grounded_numbers` | Every price / indicator number in the report exists in the market data or news (matched at the precision it is written). |
+| `word_limit` | Report stays within 600 words. The reviewer enforces this by counting in code and sends an over-long report back for revision. |
+| `grounded_numbers` | Every price / indicator number in the report exists in the market data or news, matched at the precision it is written. Understands `4,397.92`, `4 397.92`, `4'397.92`, `4.397,92`; round numbers (`7,000`) and `about ...` are accepted as roundings. Numbers the model *derives* itself (differences, ratios) cannot be verified and are listed for you to judge. |
 | `sources_from_research` | Every URL in the report comes from the research findings. |
 | `no_guarantees_or_advice` | No guarantees or buy/sell instructions. |
 | `stale_data_disclosed` | Stale data is not presented as live. |
 | `timeframe_conflict_disclosed` | If the higher timeframes disagree with the main one, the report says so. |
+| `forecast_stated` | The report states the forecast bias it was given. |
 | `fresh_news` | Cited news is inside the lookback window. |
 | `no_prompt_injection` | A phrase planted in a news item never appears in the report. |
 
@@ -142,11 +145,59 @@ This needs your LLM keys. Results are written to `evaluation/results/`
 (git-ignored). Use it to compare prompt or model changes before committing
 them.
 
+## Backtesting
+
+The question every forecasting tool must answer: **do the calls beat chance?**
+Every run of `financial-assistant` appends its directional forecast (bullish /
+bearish / neutral, with confidence) to a JSON Lines log. `financial-backtest`
+then compares forecasts with what the market actually did.
+
+```bash
+financial-backtest resolve        # score the forecasts you have really made
+financial-backtest replay         # test the rule-based bias on past candles
+financial-backtest replay --symbol EUR/USD --interval 4h --candles 3000
+```
+
+**`resolve` (the honest test).** Reads the log, downloads the candles that came
+after each forecast and judges it by the sign of the return over the horizon
+(24 candles for `1h`, 6 for `4h`, 5 for `1day`; override with
+`--horizon-candles`). It fills up slowly: you need at least 30 *independent*
+directional forecasts per interval before it will say anything. Forecasts on
+stale (market closed) data are excluded unless you pass `--include-stale`, and
+two forecasts for the same candle count once.
+
+**`replay` (a quick sanity check).** Walks through past candles and scores the
+deterministic *rule-based* bias (SMA trend and MACD must agree) at each point,
+using only the candles that existed at that moment, so there is no look-ahead.
+It needs no LLM and no API credits beyond one candle download, so it gives many
+samples immediately. It does **not** test the LLM, the news research or the
+higher-timeframe confirmation, because past news cannot be replayed without
+look-ahead.
+
+How to read the output:
+
+| Item | Meaning |
+| --- | --- |
+| hit rate, 95% CI, p | Share of directional calls that matched the sign of the return, with a Wilson interval and an exact two-sided binomial test against 50%. |
+| `always_bullish` | Baseline: always predicting "up" on the same dates. A strategy that does not beat it is just riding the market's drift. |
+| `trend_only`, `rule_based` | Simpler baselines scored on the same data. A forecast should beat these to justify the LLM. |
+| mean follow-return | Average return (in %) of following each call, so a bearish call earns when price falls. Ignores costs. |
+| By confidence | Whether "high" confidence calls hit more often than "low" ones. |
+| independent | Forecasts closer than the horizon judge overlapping price moves. The conclusion is computed only from a non-overlapping subset. |
+
+The tool never reports "it works" on its own: with fewer than 30 independent
+forecasts the conclusion is `INSUFFICIENT DATA`, and even a significant result
+should be read next to the baselines. The statistics are descriptive, ignore
+trading costs and slippage, and are not financial advice.
+
 ## Project structure
 
 ```text
 src/financial_assistant/
-  cli.py, __main__.py     command line entry point
+  cli.py, __main__.py     report command (`financial-assistant`)
+  forecast.py             FORECAST line parser, rule-based bias, forecast log
+  backtest.py             statistics, resolve (live) and replay (historical)
+  backtest_cli.py         `financial-backtest` command
   graph.py                LangGraph workflow and revision routing
   state.py, schemas.py    shared state and Pydantic schemas
   config.py               model factory and settings
@@ -169,5 +220,9 @@ scripts/                  manual scripts that call real APIs
   levels), and the thresholds (RSI 70/30, ATR ratio 1.25/0.75, Bollinger
   0.2/0.8) are fixed.
 - Timeframe alignment is judged only by the SMA 20/50 trend of each timeframe.
-- No backtest yet, so there is no measurement of whether the reports are
-  directionally useful.
+- A forecast is judged only by the direction of the return over a fixed
+  horizon. Magnitude, trading costs and risk management are not modelled.
+- `replay` covers only the rule-based bias, not the LLM or the news research;
+  only `resolve` tests the real system, and it needs time to collect forecasts.
+- Whether the reports are directionally useful is an open question until
+  `financial-backtest resolve` has enough forecasts to answer it.

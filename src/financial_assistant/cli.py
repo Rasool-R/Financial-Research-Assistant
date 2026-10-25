@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+from financial_assistant.config import FORECAST_LOG_PATH
+from financial_assistant.forecast import append_record, build_forecast_record
 from financial_assistant.tools.market_data import (
     SUPPORTED_INTERVALS,
     SUPPORTED_SYMBOLS,
@@ -49,6 +51,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also print the reviewer's verdict and any non-fatal errors.",
     )
     parser.add_argument(
+        "--no-log",
+        action="store_true",
+        help="Do not append this run's forecast to the backtest log.",
+    )
+    parser.add_argument(
+        "--log-path",
+        type=Path,
+        default=Path(FORECAST_LOG_PATH),
+        help=f"Forecast log used by financial-backtest (default: "
+        f"{FORECAST_LOG_PATH}).",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
@@ -77,6 +91,39 @@ def run_workflow(symbol: str, interval: str, query: str) -> dict:
             "interval": interval,
         }
     )
+
+
+def log_forecast(result: dict, args) -> None:
+    """Append the run's forecast to the log and tell the user what happened."""
+
+    forecast = result.get("forecast") or {}
+    record = build_forecast_record(result)
+
+    if record is None:
+        if forecast.get("bias") == "unknown":
+            print(
+                "Note: this run made no directional forecast, so nothing "
+                "was logged for backtesting.",
+                file=sys.stderr,
+            )
+        return
+
+    summary = (
+        f"Forecast: {record['bias']} ({record['confidence']} confidence) "
+        f"for the next {forecast.get('horizon_candles')} "
+        f"{record['interval']} candles."
+    )
+
+    if args.no_log:
+        print(f"{summary} Not logged (--no-log).", file=sys.stderr)
+        return
+
+    append_record(args.log_path, record)
+
+    note = " Data was stale; it is excluded from scoring by default." if (
+        record["is_stale"]
+    ) else ""
+    print(f"{summary} Logged to {args.log_path}.{note}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -111,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
             print("\n--- Non-fatal errors ---")
             for error in errors:
                 print(f"- {error}")
+
+    log_forecast(result, args)
 
     if review.get("verdict") == "NEEDS_REVISION":
         print(

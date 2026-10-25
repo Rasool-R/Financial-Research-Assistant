@@ -21,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 financial-assistant = "financial_assistant.cli:main"
+financial-backtest = "financial_assistant.backtest_cli:main"
 
 [project.optional-dependencies]
 dev = [

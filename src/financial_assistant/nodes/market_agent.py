@@ -3,6 +3,11 @@ import json
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from financial_assistant.config import get_model
+from financial_assistant.forecast import (
+    horizon_for,
+    parse_forecast,
+    unknown_forecast,
+)
 from financial_assistant.tools.market_summary import (
     get_multi_timeframe_summary,
 )
@@ -23,9 +28,13 @@ Rules:
   conflict with the main timeframe. If multi_timeframe.unavailable is not
   empty, say that higher-timeframe confirmation is incomplete.
 - Identify agreements or conflicts between indicators.
-- End with a directional bias (bullish, bearish or neutral) and a
-  confidence level (low, medium or high). Use high confidence only when
-  trend, momentum and the higher timeframes agree.
+- Give a directional bias (bullish, bearish or neutral) and a confidence
+  level (low, medium or high) for the forecast horizon stated in the
+  request. Use high confidence only when trend, momentum and the higher
+  timeframes agree.
+- The very last line of your answer must be exactly:
+  FORECAST: bias=<bullish|bearish|neutral>; confidence=<low|medium|high>
+  Write nothing after it. It is read by software.
 - Distinguish observations from interpretations.
 - If data_quality.is_stale is true, say that the prices may not be live.
 - Do not present the analysis as a guaranteed prediction.
@@ -46,6 +55,8 @@ def market_agent(state: dict) -> dict:
         outputsize=100,
     )
 
+    horizon = horizon_for(interval)
+
     model = get_model()
 
     response = model.invoke(
@@ -53,6 +64,8 @@ def market_agent(state: dict) -> dict:
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(
                 content=(
+                    f"Forecast horizon: the next {horizon} candles of the "
+                    f"{interval} timeframe.\n\n"
                     "Analyze the following market summary:\n\n"
                     f"{json.dumps(market_summary, indent=2)}"
                 )
@@ -60,19 +73,35 @@ def market_agent(state: dict) -> dict:
         ]
     )
 
+    parsed, analysis = parse_forecast(response.content)
+
+    errors = []
+
+    if parsed is None:
+        forecast = unknown_forecast(interval)
+        errors.append(
+            "market_agent: the forecast line was missing or invalid, so "
+            "this run has no directional forecast and cannot be backtested."
+        )
+    else:
+        forecast = {**parsed, "horizon_candles": horizon}
+
     update = {
         "market_summary": market_summary,
-        "market_analysis": response.content,
+        "market_analysis": analysis,
+        "forecast": forecast,
     }
 
     unavailable = market_summary["multi_timeframe"]["unavailable"]
 
-    if unavailable:
-        update["errors"] = [
-            f"market_agent: {item['interval']} data unavailable "
-            f"({item['error']}), so higher-timeframe confirmation is "
-            "incomplete."
-            for item in unavailable
-        ]
+    errors.extend(
+        f"market_agent: {item['interval']} data unavailable "
+        f"({item['error']}), so higher-timeframe confirmation is "
+        "incomplete."
+        for item in unavailable
+    )
+
+    if errors:
+        update["errors"] = errors
 
     return update

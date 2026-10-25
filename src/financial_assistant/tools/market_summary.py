@@ -83,7 +83,7 @@ def get_market_summary(
     interval: str = "1h",
     outputsize: int = 100,
 ) -> dict[str, Any]:
-    """Return a structured summary of recent market conditions."""
+    """Fetch candles and return a structured summary of market conditions."""
 
     df = get_market_data(
         symbol=symbol,
@@ -98,7 +98,20 @@ def get_market_summary(
             "Increase outputsize."
         )
 
-    df = add_technical_indicators(df)
+    return build_market_summary(add_technical_indicators(df), symbol, interval)
+
+
+def build_market_summary(
+    df: pd.DataFrame,
+    symbol: str,
+    interval: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Summarize candles that already carry indicator columns.
+
+    Performs no I/O and looks only at the rows it is given, so a backtest can
+    pass a slice that ends in the past without any look-ahead.
+    """
 
     latest = df.iloc[-1]
 
@@ -111,7 +124,7 @@ def get_market_summary(
             f"Indicators could not be computed: {missing_indicators}"
         )
 
-    data_quality = build_data_quality(latest["datetime"], interval)
+    data_quality = build_data_quality(latest["datetime"], interval, now)
     previous = df.iloc[-2] if len(df) >= 2 else None
 
     if latest["sma_20"] > latest["sma_50"]:

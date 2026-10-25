@@ -158,3 +158,11 @@ def test_report_sees_the_full_market_summary_and_both_analyses(monkeypatch):
     assert evidence["risk_and_levels_analysis"] == "analysis two"
     assert "market_agent_analysis" not in evidence
     assert "independent_technical_analysis" not in evidence
+
+
+def test_report_receives_the_forecast_and_must_not_contradict_it(monkeypatch):
+    forecast = {"bias": "bullish", "confidence": "medium", "horizon_candles": 24}
+
+    _, evidence = run_report(monkeypatch, {"forecast": forecast})
+
+    assert evidence["forecast"] == forecast

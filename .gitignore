@@ -10,3 +10,7 @@ build/
 .history
 .ruff_cache/
 evaluation/results/
+
+# forecast log written by the CLI (personal run history)
+data/
+

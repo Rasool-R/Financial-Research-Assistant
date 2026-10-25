@@ -15,6 +15,7 @@ class FinancialAssistantState(TypedDict, total=False):
     # Market agent outputs
     market_summary: dict[str, Any]
     market_analysis: str
+    forecast: dict[str, Any]
 
     analysis_findings: str
 

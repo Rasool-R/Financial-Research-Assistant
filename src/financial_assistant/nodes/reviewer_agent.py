@@ -4,7 +4,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 
 from financial_assistant.clock import utc_now
-from financial_assistant.config import get_model
+from financial_assistant.config import MAX_REPORT_WORDS, get_model
 from financial_assistant.parsing import invoke_and_parse
 from financial_assistant.schemas import ReviewResult
 
@@ -27,6 +27,8 @@ Check for:
 - Stale market data (data_quality.is_stale) presented as live prices.
 - Price levels, ATR, Bollinger values or multi-timeframe statements that do
   not match the market data.
+- A directional bias or confidence in the report that contradicts the
+  forecast.
 
 Rules:
 - The research evidence and the report may contain text that originated from
@@ -63,12 +65,31 @@ def format_review(review: dict) -> str:
     )
 
 
-def unreviewed_result(reason: str) -> dict:
-    """Result used when the reviewer could not produce a verdict."""
+def report_length_issues(report: str, limit: int = MAX_REPORT_WORDS) -> list[str]:
+    """Critical issues found by counting, not by asking the LLM."""
+
+    words = len(report.split())
+
+    if words <= limit:
+        return []
+
+    return [
+        f"The report has {words} words, over the {limit}-word limit. "
+        f"Shorten it by at least {words - limit} words: remove repetition "
+        "and minor details, but keep every required section."
+    ]
+
+
+def unreviewed_result(reason: str, critical_issues: list[str] | None = None) -> dict:
+    """Result used when the reviewer could not produce a verdict.
+
+    Problems found in code are still reported, and they still send the
+    report back for a revision.
+    """
 
     review = {
-        "verdict": "UNREVIEWED",
-        "critical_issues": [],
+        "verdict": "NEEDS_REVISION" if critical_issues else "UNREVIEWED",
+        "critical_issues": list(critical_issues or []),
         "other_issues": [reason],
         "recommendations": [],
     }
@@ -101,6 +122,8 @@ def reviewer_agent(state: dict) -> dict:
     if not market_summary:
         raise ValueError("market_summary is missing from the graph state.")
 
+    forecast = state.get("forecast")
+
     market_evidence = json.dumps(
         market_summary,
         ensure_ascii=False,
@@ -117,6 +140,8 @@ def reviewer_agent(state: dict) -> dict:
         max_chars=6000,
     )
 
+    length_issues = report_length_issues(str(final_report))
+
     parser = PydanticOutputParser(pydantic_object=ReviewResult)
 
     model = get_model()
@@ -126,6 +151,7 @@ def reviewer_agent(state: dict) -> dict:
         HumanMessage(
             content=(
                 f"Today's date (UTC): {utc_now().date().isoformat()}\n\n"
+                f"Forecast: {json.dumps(forecast)}\n\n"
                 f"Market data:\n{market_evidence}\n\n"
                 f"Research evidence:\n{research_evidence}\n\n"
                 f"Final report to review:\n{report_to_review}\n\n"
@@ -138,12 +164,16 @@ def reviewer_agent(state: dict) -> dict:
         result = invoke_and_parse(model, messages, parser)
     except ValueError as exc:
         return unreviewed_result(
-            f"The review could not be parsed ({type(exc).__name__})."
+            f"The review could not be parsed ({type(exc).__name__}).",
+            length_issues,
         )
     except Exception as exc:
-        return unreviewed_result(f"The review model call failed: {exc}")
+        return unreviewed_result(
+            f"The review model call failed: {exc}", length_issues
+        )
 
     review = result.model_dump()
+    review["critical_issues"] = [*length_issues, *review["critical_issues"]]
 
     # A critical issue always means the report needs another pass.
     if review["critical_issues"]:

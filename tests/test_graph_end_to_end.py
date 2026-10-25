@@ -69,7 +69,9 @@ class RoutingModel:
         system = messages[0].content
 
         if "trend and momentum analyst" in system:
-            return FakeResponse("market analysis")
+            return FakeResponse(
+                "market analysis\nFORECAST: bias=bullish; confidence=medium"
+            )
         if "risk and levels analyst" in system:
             return FakeResponse("independent analysis")
         if "financial news research agent" in system:
@@ -177,3 +179,81 @@ def test_full_workflow_survives_a_failing_higher_timeframe(monkeypatch):
     assert any("4h data unavailable" in e for e in result["errors"])
     # the report writer was told that confirmation is incomplete
     assert model.report_inputs[0]["pipeline_warnings"] == result["errors"]
+
+
+def test_a_run_can_be_logged_and_scored_later(monkeypatch, tmp_path):
+    """The whole loop: run -> forecast -> log -> resolve against the market."""
+
+    from financial_assistant.backtest import resolve_forecasts
+    from financial_assistant.forecast import (
+        append_record,
+        build_forecast_record,
+        load_records,
+    )
+
+    model = RoutingModel([review("PASS")])
+    result = run_real_graph(monkeypatch, model)
+
+    assert result["forecast"] == {
+        "bias": "bullish",
+        "confidence": "medium",
+        "horizon_candles": 24,
+    }
+    assert "FORECAST" not in result["market_analysis"]
+
+    log = tmp_path / "forecasts.jsonl"
+    append_record(log, build_forecast_record(result))
+    records, skipped = load_records(log)
+    assert skipped == 0
+
+    # later: the same series has grown by 100 candles and keeps rising
+    outcome = resolve_forecasts(
+        records,
+        lambda symbol, interval, outputsize: make_candles(200),
+        include_stale=True,  # the fixture candles are from January
+        now=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+
+    report = outcome["intervals"]["1h"]
+    assert report["samples"] == 1
+    assert report["pending"] == 0
+    assert report["methods"]["system"]["hits"] == 1
+    assert report["methods"]["rule_based"]["hits"] == 1
+
+
+def test_a_run_without_a_forecast_line_cannot_be_logged(monkeypatch):
+    from financial_assistant.forecast import build_forecast_record
+
+    class NoForecastModel(RoutingModel):
+        def invoke(self, messages):
+            if "trend and momentum analyst" in messages[0].content:
+                return FakeResponse("Looks bullish, but no formal line.")
+            return super().invoke(messages)
+
+    result = run_real_graph(monkeypatch, NoForecastModel([review("PASS")]))
+
+    assert result["forecast"]["bias"] == "unknown"
+    assert any("cannot be backtested" in e for e in result["errors"])
+    assert build_forecast_record(result) is None
+
+
+def test_an_over_long_report_is_sent_back_and_shortened(monkeypatch):
+    """The reviewer LLM says PASS, but the code counts 650 words."""
+
+    class LongFirstDraft(RoutingModel):
+        def invoke(self, messages):
+            response = super().invoke(messages)
+            if response.content == "report v1":
+                return FakeResponse("word " * 650)
+            return response
+
+    model = LongFirstDraft([review("PASS"), review("PASS")])
+
+    result = run_real_graph(monkeypatch, model)
+
+    assert result["final_report"] == "report v2"
+    assert result["revision_count"] == 1
+    assert result["review"]["verdict"] == "PASS"
+    feedback = model.report_inputs[1]["reviewer_feedback"]
+    assert "650 words" in feedback["critical_issues"][0]
+    assert model.report_inputs[1]["previous_report"].startswith("word word")

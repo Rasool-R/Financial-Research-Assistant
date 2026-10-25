@@ -5,6 +5,8 @@ import pytest
 from financial_assistant.nodes import analysis_agent, market_agent
 from tests.fakes import FakeModel
 
+FORECAST_LINE = "FORECAST: bias=bearish; confidence=high"
+
 SUMMARY = {
     "symbol": "XAU/USD",
     "interval": "1h",
@@ -14,7 +16,7 @@ SUMMARY = {
 
 
 def run_market_agent(monkeypatch, summary):
-    model = FakeModel(["TREND TEXT"])
+    model = FakeModel([f"TREND TEXT\n{FORECAST_LINE}"])
     monkeypatch.setattr(market_agent, "get_model", lambda: model)
     monkeypatch.setattr(
         market_agent, "get_multi_timeframe_summary", lambda **kw: summary
@@ -32,10 +34,17 @@ def test_market_agent_is_the_trend_and_momentum_analyst(monkeypatch):
     assert "trend and momentum analyst" in system.content
     assert "do not discuss those" in system.content
     assert "multi_timeframe" in system.content
-    payload = json.loads(human.content.split("\n\n", 1)[1])
+    payload = json.loads(human.content[human.content.index("{") :])
     assert payload["multi_timeframe"] == SUMMARY["multi_timeframe"]
-    assert result["market_analysis"] == "TREND TEXT"
+    assert result["market_analysis"] == "TREND TEXT"  # the line is removed
     assert result["market_summary"] is SUMMARY
+    assert result["forecast"] == {
+        "bias": "bearish",
+        "confidence": "high",
+        "horizon_candles": 24,
+    }
+    assert "next 24 candles of the 1h timeframe" in human.content
+    assert "FORECAST: bias=<bullish|bearish|neutral>" in system.content
     assert "errors" not in result
 
 
@@ -95,3 +104,38 @@ def test_analysis_agent_stays_independent_of_the_trend_analysis(monkeypatch):
 def test_analysis_agent_requires_a_market_summary():
     with pytest.raises(ValueError, match="market_summary"):
         analysis_agent.analysis_agent({})
+
+
+def test_missing_forecast_line_gives_unknown_forecast_and_a_warning(
+    monkeypatch,
+):
+    model = FakeModel(["Looks bullish to me."])
+    monkeypatch.setattr(market_agent, "get_model", lambda: model)
+    monkeypatch.setattr(
+        market_agent, "get_multi_timeframe_summary", lambda **kw: SUMMARY
+    )
+
+    result = market_agent.market_agent({"symbol": "XAU/USD", "interval": "4h"})
+
+    assert result["forecast"] == {
+        "bias": "unknown",
+        "confidence": "unknown",
+        "horizon_candles": 6,
+    }
+    assert result["market_analysis"] == "Looks bullish to me."
+    assert "cannot be backtested" in result["errors"][0]
+
+
+def test_horizon_depends_on_the_interval(monkeypatch):
+    for interval, horizon in [("1h", 24), ("4h", 6), ("1day", 5)]:
+        model = FakeModel([f"t\n{FORECAST_LINE}"])
+        monkeypatch.setattr(market_agent, "get_model", lambda m=model: m)
+        monkeypatch.setattr(
+            market_agent, "get_multi_timeframe_summary", lambda **kw: SUMMARY
+        )
+
+        result = market_agent.market_agent(
+            {"symbol": "XAU/USD", "interval": interval}
+        )
+
+        assert result["forecast"]["horizon_candles"] == horizon

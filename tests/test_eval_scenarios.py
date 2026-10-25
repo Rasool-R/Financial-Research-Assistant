@@ -87,6 +87,10 @@ class FixtureModel:
                     }
                 )
             )
+        if "trend and momentum analyst" in system:
+            return FakeResponse(
+                "trend text\nFORECAST: bias=bullish; confidence=medium"
+            )
         if "final reporting agent" in system:
             return FakeResponse("1. Executive Summary\nTiny report.")
         if "quality reviewer" in system:
@@ -122,7 +126,7 @@ def test_run_scenario_uses_frozen_data_with_the_real_graph(
 
     assert record["trend_matches_fixture"] is True
     assert record["reviewer_verdict"] == "PASS"
-    assert len(record["evaluators"]) == 9
+    assert len(record["evaluators"]) == 10
     assert record["errors"] == []
     # the tiny fake report is missing most sections, so the run must fail
     assert record["passed"] is False

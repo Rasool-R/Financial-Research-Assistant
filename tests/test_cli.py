@@ -90,3 +90,103 @@ def test_warns_when_review_still_failing(monkeypatch, capsys):
 
     assert cli.main([]) == 0
     assert "still reported critical issues" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Forecast logging
+# --------------------------------------------------------------------------
+
+LOGGED_RESULT = {
+    "final_report": "REPORT BODY",
+    "forecast": {"bias": "bullish", "confidence": "medium", "horizon_candles": 24},
+    "market_summary": {
+        "symbol": "XAU/USD",
+        "interval": "1h",
+        "latest_candle": {"datetime": "2026-10-23T10:00:00+00:00", "close": 4400.5},
+        "market_conditions": {"trend": "bullish", "macd_momentum": "bullish"},
+        "volatility": {"atr_percent": 0.2},
+        "data_quality": {"is_stale": False},
+    },
+    "review": {"verdict": "PASS"},
+}
+
+
+def run_with(monkeypatch, result, *args):
+    monkeypatch.setattr(cli, "run_workflow", lambda *a: result)
+    return cli.main(list(args))
+
+
+def test_the_forecast_is_logged_after_a_run(monkeypatch, tmp_path, capsys):
+    from financial_assistant.forecast import load_records
+
+    log = tmp_path / "data" / "forecasts.jsonl"
+
+    assert run_with(monkeypatch, LOGGED_RESULT, "--log-path", str(log)) == 0
+
+    records, _ = load_records(log)
+    assert len(records) == 1
+    assert records[0]["bias"] == "bullish"
+    assert records[0]["reference_price"] == 4400.5
+    err = capsys.readouterr().err
+    assert "Forecast: bullish (medium confidence)" in err
+    assert "next 24 1h candles" in err
+    assert f"Logged to {log}" in err
+
+
+def test_no_log_flag_skips_the_log(monkeypatch, tmp_path, capsys):
+    log = tmp_path / "forecasts.jsonl"
+
+    run_with(monkeypatch, LOGGED_RESULT, "--no-log", "--log-path", str(log))
+
+    assert not log.exists()
+    assert "Not logged (--no-log)" in capsys.readouterr().err
+
+
+def test_runs_without_a_direction_are_not_logged(monkeypatch, tmp_path, capsys):
+    log = tmp_path / "forecasts.jsonl"
+    result = {
+        **LOGGED_RESULT,
+        "forecast": {"bias": "unknown", "confidence": "unknown"},
+    }
+
+    run_with(monkeypatch, result, "--log-path", str(log))
+
+    assert not log.exists()
+    assert "no directional forecast" in capsys.readouterr().err
+
+
+def test_stale_forecasts_are_logged_with_a_note(monkeypatch, tmp_path, capsys):
+    from financial_assistant.forecast import load_records
+
+    log = tmp_path / "forecasts.jsonl"
+    stale = {
+        **LOGGED_RESULT,
+        "market_summary": {
+            **LOGGED_RESULT["market_summary"],
+            "data_quality": {"is_stale": True},
+        },
+    }
+
+    run_with(monkeypatch, stale, "--log-path", str(log))
+
+    assert load_records(log)[0][0]["is_stale"] is True
+    assert "excluded from scoring by default" in capsys.readouterr().err
+
+
+def test_each_run_appends_a_new_line(monkeypatch, tmp_path):
+    log = tmp_path / "forecasts.jsonl"
+
+    for _ in range(3):
+        run_with(monkeypatch, LOGGED_RESULT, "--log-path", str(log))
+
+    assert len(log.read_text().splitlines()) == 3
+
+
+def test_json_output_stays_parseable_when_logging(monkeypatch, tmp_path, capsys):
+    import json
+
+    log = tmp_path / "forecasts.jsonl"
+
+    run_with(monkeypatch, LOGGED_RESULT, "--json", "--log-path", str(log))
+
+    assert json.loads(capsys.readouterr().out)["final_report"] == "REPORT BODY"
