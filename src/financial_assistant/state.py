@@ -11,6 +11,7 @@ class FinancialAssistantState(TypedDict, total=False):
     # Market configuration
     symbol: str
     interval: str
+    horizon_candles: int  # how many candles ahead the forecast is for
 
     # Market agent outputs
     market_summary: dict[str, Any]

@@ -106,6 +106,7 @@ def build_forecast_record(
         "interval": summary["interval"],
         "bias": forecast["bias"],
         "confidence": forecast["confidence"],
+        "horizon_candles": forecast.get("horizon_candles"),
         "rule_bias": rule["bias"],
         "rule_confidence": rule["confidence"],
         "trend": summary["market_conditions"]["trend"],

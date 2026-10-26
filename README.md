@@ -77,9 +77,64 @@ cp .env.example .env             # then fill in your keys
 
 Check your LLM connection with `python scripts/check_model.py`.
 
+## Quick start: ask a question
+
+```bash
+python main.py                         # interactive: type your question
+python main.py "قیمت دو ساعت آینده طلا چطور خواهد بود؟"
+python main.py "will gold go up in the next 2 hours?"
+```
+
+The whole workflow runs (market data, indicators, news, report, review), but
+you only see a short answer: a header, one or two sentences about what drives
+the picture, the forecast direction and a one-line disclaimer.
+
+```text
+طلا (XAU/USD) · 2 ساعت آینده
+روند کوتاه‌مدت صعودی و RSI خنثی است؛ مقاومت نزدیک حدود یک ATR بالاتر است.
+پیش‌بینی: صعودی ↑ (اطمینان: متوسط)
+این توصیه‌ی مالی نیست.
+```
+
+The direction line is written by code from the model's machine-readable
+forecast, never by the free-text sentence, so the two cannot contradict each
+other. Add `--full` (or type `details` in interactive mode) for the complete
+English report, `--lang en` / `--lang fa` to force the answer language and
+`--no-log` to keep the forecast out of the backtest log.
+
+What it understands (Persian or English):
+
+| You write | Understood as |
+| --- | --- |
+| `طلا ۲ ساعت آینده`, `gold in 2 hours` | gold, forecast 2 hourly candles ahead |
+| `یورو فردا`, `euro tomorrow` | EUR/USD, 24 hours ahead (6 candles of 4h) |
+| `gold in 3 days` | 3 daily candles ahead |
+| `طلا ۴ ساعته`, `gold 4h` | gold on the 4h timeframe, default horizon |
+| `gold 2 hours ahead on the 4h chart` | both: 4h timeframe, 1 candle ahead |
+
+"In 4h" is a horizon (four hours ahead) while "4h" or "۴ ساعته" is a timeframe
+(candle size). If the symbol or the period is missing, the assistant asks;
+anything shorter than one hour is rounded up to one hourly candle, and the
+answer tells you when the period was rounded. The longest horizon is 48
+candles. The same is available as `financial-ask`.
+
+Things to know:
+
+* **"طلا" / "gold" means world spot gold (XAU/USD, per ounce), not the local
+  price of gold, coins or other currencies.** Only gold and EUR/USD are
+  supported.
+* A two-hour forecast is mostly noise. Short horizons are the hardest to call,
+  so treat the direction as one input, not a signal; `financial-backtest`
+  (below) measures how well the forecasts actually did.
+* Persian output needs a terminal that shows right-to-left text. Classic
+  Windows consoles often display it disconnected or reversed; use Windows
+  Terminal, or `--lang en`.
+* Every answer's forecast is appended to `data/forecasts.jsonl` (with its
+  horizon) so it can be scored later. Use `--no-log` to opt out.
+
 ## Usage
 
-Command line:
+The report command (explicit symbol and timeframe, full report):
 
 ```bash
 financial-assistant                                   # XAU/USD, 1h
@@ -194,6 +249,8 @@ trading costs and slippage, and are not financial advice.
 
 ```text
 src/financial_assistant/
+  app.py                  `main.py` / `financial-ask`: questions in plain language
+  request_parser.py       Persian/English question -> symbol, timeframe, horizon
   cli.py, __main__.py     report command (`financial-assistant`)
   forecast.py             FORECAST line parser, rule-based bias, forecast log
   backtest.py             statistics, resolve (live) and replay (historical)
@@ -206,6 +263,7 @@ src/financial_assistant/
   nodes/                  the five agents
   tools/                  market data, indicators, market structure (swing
                           levels, SMA crosses), market summary, web search
+main.py                   ask a question (python main.py)
 tests/                    offline unit and end-to-end tests
 evaluation/               frozen scenarios, evaluators, runner
 scripts/                  manual scripts that call real APIs

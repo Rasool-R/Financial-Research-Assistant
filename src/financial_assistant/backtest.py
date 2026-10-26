@@ -347,6 +347,30 @@ def _timestamp(value: str) -> pd.Timestamp:
     return stamp.tz_convert("UTC")
 
 
+def _horizon_of(record: dict[str, Any], override: int | None) -> int:
+    """Horizon of a logged forecast: the override, else the one it was made
+    with, else the default for its interval (older log lines have none)."""
+
+    if override:
+        return override
+
+    stored = record.get("horizon_candles")
+
+    if isinstance(stored, int) and stored >= 1:
+        return stored
+
+    return horizon_for(record["interval"])
+
+
+def _report_label(interval: str, horizon: int, override: int | None) -> str:
+    """Forecasts with different horizons are never mixed into one statistic."""
+
+    if override or horizon == horizon_for(interval):
+        return interval
+
+    return f"{interval} (+{horizon} candles)"
+
+
 def resolve_forecasts(
     records: list[dict[str, Any]],
     fetch: Callable[[str, str, int], pd.DataFrame],
@@ -367,10 +391,13 @@ def resolve_forecasts(
     duplicates = 0
 
     for record in records:
+        # The horizon is part of the forecast: "in 2 hours" and "in 6 hours"
+        # asked on the same candle are different forecasts.
         key = (
             record["symbol"],
             record["interval"],
             record["reference_candle_start"],
+            _horizon_of(record, horizon),
         )
 
         if key in seen:
@@ -402,34 +429,37 @@ def resolve_forecasts(
     horizons: dict[str, int] = {}
 
     for (symbol, interval), group in series.items():
-        horizon_candles = horizon or horizon_for(interval)
-        horizons[interval] = horizon_candles
+        candle_horizons = [_horizon_of(r, horizon) for r in group]
 
         earliest = min(_timestamp(r["reference_candle_start"]) for r in group)
         age_in_candles = int((now - earliest) / INTERVAL_DELTAS[interval])
         outputsize = max(
-            100, min(MAX_FETCH_CANDLES, age_in_candles + horizon_candles + 10)
+            100,
+            min(MAX_FETCH_CANDLES, age_in_candles + max(candle_horizons) + 10),
         )
 
         candles = fetch(symbol, interval, outputsize).reset_index(drop=True)
         closes = candles["close"].to_numpy(dtype=float)
 
-        for record in group:
+        for record, horizon_candles in zip(group, candle_horizons, strict=True):
+            label = _report_label(interval, horizon_candles, horizon)
+            horizons[label] = horizon_candles
+
             reference = _timestamp(record["reference_candle_start"])
             matches = np.flatnonzero((candles["datetime"] == reference).to_numpy())
 
             if len(matches) == 0:
-                unmatched[interval] += 1
+                unmatched[label] += 1
                 continue
 
             index = int(matches[0])
             change = forward_return_percent(closes, index, horizon_candles)
 
             if change is None:
-                pending[interval] += 1
+                pending[label] += 1
                 continue
 
-            samples[interval].append(
+            samples[label].append(
                 {
                     "bias": record["bias"],
                     "confidence": record.get("confidence"),
@@ -445,11 +475,11 @@ def resolve_forecasts(
             )
 
     intervals = {}
-    for interval, horizon_candles in horizons.items():
-        report = evaluate_samples(samples[interval], horizon_candles)
-        report["pending"] = pending[interval]
-        report["unmatched"] = unmatched[interval]
-        intervals[interval] = report
+    for label, horizon_candles in horizons.items():
+        report = evaluate_samples(samples[label], horizon_candles)
+        report["pending"] = pending[label]
+        report["unmatched"] = unmatched[label]
+        intervals[label] = report
 
     return {
         "mode": "live",

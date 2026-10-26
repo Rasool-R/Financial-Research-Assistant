@@ -14,3 +14,4 @@ evaluation/results/
 # forecast log written by the CLI (personal run history)
 data/
 
+financial_research_assistant.egg-info/

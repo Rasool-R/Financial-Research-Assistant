@@ -139,3 +139,37 @@ def test_horizon_depends_on_the_interval(monkeypatch):
         )
 
         assert result["forecast"]["horizon_candles"] == horizon
+
+
+def test_the_horizon_from_the_request_is_used(monkeypatch):
+    model = FakeModel([f"t\n{FORECAST_LINE}"])
+    monkeypatch.setattr(market_agent, "get_model", lambda: model)
+    monkeypatch.setattr(
+        market_agent, "get_multi_timeframe_summary", lambda **kw: SUMMARY
+    )
+
+    result = market_agent.market_agent(
+        {"symbol": "XAU/USD", "interval": "1h", "horizon_candles": 2}
+    )
+
+    assert result["forecast"]["horizon_candles"] == 2
+    assert "next 2 candles of the 1h timeframe" in model.calls[0][1].content
+
+
+def test_run_workflow_passes_the_horizon_to_the_graph(monkeypatch):
+    from financial_assistant import cli, graph
+
+    seen = []
+
+    class FakeGraph:
+        def invoke(self, state):
+            seen.append(state)
+            return {}
+
+    monkeypatch.setattr(graph, "financial_graph", FakeGraph())
+
+    cli.run_workflow("XAU/USD", "1h", "q", horizon_candles=2)
+    cli.run_workflow("XAU/USD", "4h", "q")
+
+    assert seen[0]["horizon_candles"] == 2
+    assert "horizon_candles" not in seen[1]  # the interval default applies

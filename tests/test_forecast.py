@@ -140,6 +140,7 @@ def test_build_forecast_record():
         "interval": "1h",
         "bias": "bullish",
         "confidence": "medium",
+        "horizon_candles": 24,
         "rule_bias": "bullish",
         "rule_confidence": "high",
         "trend": "bullish",

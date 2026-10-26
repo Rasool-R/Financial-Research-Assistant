@@ -633,3 +633,103 @@ def test_replay_is_labelled_as_rule_based_only():
     assert report["horizon_candles"] == 6
     assert "No LLM" in report["scope_note"]
     assert "rule_based" in report["methods"]
+
+
+# --------------------------------------------------------------------------
+# Forecasts made with their own horizon
+# --------------------------------------------------------------------------
+
+
+def test_each_forecast_is_judged_over_the_horizon_it_was_made_with():
+    # close = 100 + i; forecast at index 10 for "2 candles ahead"
+    result = bt.resolve_forecasts(
+        [record(10, horizon_candles=2)], Fetch(), now=NOW
+    )
+
+    report = result["intervals"]["1h (+2 candles)"]
+    assert report["horizon_candles"] == 2
+    stats = report["methods"]["system"]
+    assert stats["mean_follow_return_percent"] == pytest.approx(2 / 110 * 100)
+
+
+def test_forecasts_with_different_horizons_are_never_mixed():
+    result = bt.resolve_forecasts(
+        [
+            record(10, horizon_candles=2),
+            record(20, horizon_candles=2),
+            record(30),  # default horizon for 1h: 24 candles
+            record(40, horizon_candles=24),
+        ],
+        Fetch(),
+        now=NOW,
+    )
+
+    assert set(result["intervals"]) == {"1h", "1h (+2 candles)"}
+    assert result["intervals"]["1h (+2 candles)"]["samples"] == 2
+    assert result["intervals"]["1h"]["samples"] == 2
+    assert result["intervals"]["1h"]["horizon_candles"] == 24
+
+
+def test_an_explicit_override_wins_over_the_stored_horizon():
+    result = bt.resolve_forecasts(
+        [record(10, horizon_candles=2)], Fetch(), horizon=5, now=NOW
+    )
+
+    assert set(result["intervals"]) == {"1h"}  # the override applies to all
+    assert result["intervals"]["1h"]["horizon_candles"] == 5
+
+
+@pytest.mark.parametrize("stored", [None, 0, -3, "24", 2.5])
+def test_a_missing_or_invalid_stored_horizon_falls_back_to_the_default(stored):
+    result = bt.resolve_forecasts(
+        [record(10, horizon_candles=stored)], Fetch(), now=NOW
+    )
+
+    assert result["intervals"]["1h"]["horizon_candles"] == 24
+
+
+def test_enough_history_is_fetched_for_the_longest_horizon_in_the_group():
+    fetch = Fetch()
+
+    bt.resolve_forecasts(
+        [record(100, horizon_candles=2), record(100, horizon_candles=40)],
+        fetch,
+        now=NOW,
+    )
+
+    assert len(fetch.requests) == 1  # one download per symbol and interval
+    assert fetch.requests[0][2] >= 40 + 10
+
+
+def test_the_same_candle_with_different_horizons_is_not_a_duplicate():
+    result = bt.resolve_forecasts(
+        [record(10, horizon_candles=2), record(10, horizon_candles=6)],
+        Fetch(),
+        now=NOW,
+    )
+
+    assert result["meta"]["duplicates_ignored"] == 0
+    assert set(result["intervals"]) == {"1h (+2 candles)", "1h (+6 candles)"}
+    assert all(r["samples"] == 1 for r in result["intervals"].values())
+
+
+def test_the_same_candle_and_horizon_asked_twice_still_counts_once():
+    result = bt.resolve_forecasts(
+        [record(10, horizon_candles=2), record(10, horizon_candles=2)],
+        Fetch(),
+        now=NOW,
+    )
+
+    assert result["meta"]["duplicates_ignored"] == 1
+    assert result["intervals"]["1h (+2 candles)"]["samples"] == 1
+
+
+def test_with_an_override_every_horizon_is_the_same_so_they_are_duplicates():
+    result = bt.resolve_forecasts(
+        [record(10, horizon_candles=2), record(10, horizon_candles=6)],
+        Fetch(),
+        horizon=5,
+        now=NOW,
+    )
+
+    assert result["meta"]["duplicates_ignored"] == 1

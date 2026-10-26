@@ -55,7 +55,7 @@ def market_agent(state: dict) -> dict:
         outputsize=100,
     )
 
-    horizon = horizon_for(interval)
+    horizon = int(state.get("horizon_candles") or horizon_for(interval))
 
     model = get_model()
 

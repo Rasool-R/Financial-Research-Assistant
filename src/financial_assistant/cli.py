@@ -79,18 +79,26 @@ def default_query(symbol: str) -> str:
     )
 
 
-def run_workflow(symbol: str, interval: str, query: str) -> dict:
+def run_workflow(
+    symbol: str,
+    interval: str,
+    query: str,
+    horizon_candles: int | None = None,
+) -> dict:
     """Run the LangGraph workflow and return its final state."""
 
     from financial_assistant.graph import financial_graph
 
-    return financial_graph.invoke(
-        {
-            "user_query": query,
-            "symbol": symbol,
-            "interval": interval,
-        }
-    )
+    state = {
+        "user_query": query,
+        "symbol": symbol,
+        "interval": interval,
+    }
+
+    if horizon_candles:
+        state["horizon_candles"] = horizon_candles
+
+    return financial_graph.invoke(state)
 
 
 def log_forecast(result: dict, args) -> None:
