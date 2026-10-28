@@ -65,6 +65,12 @@ def format_review(review: dict) -> str:
     )
 
 
+# A shortening request asks for this fraction of the limit: models tend to
+# stop just short of what they are asked for, so aiming at the limit itself
+# lands above it.
+LENGTH_TARGET_FRACTION = 0.85
+
+
 def report_length_issues(report: str, limit: int = MAX_REPORT_WORDS) -> list[str]:
     """Critical issues found by counting, not by asking the LLM."""
 
@@ -73,24 +79,59 @@ def report_length_issues(report: str, limit: int = MAX_REPORT_WORDS) -> list[str
     if words <= limit:
         return []
 
+    target = int(limit * LENGTH_TARGET_FRACTION)
+
     return [
-        f"The report has {words} words, over the {limit}-word limit. "
-        f"Shorten it by at least {words - limit} words: remove repetition "
-        "and minor details, but keep every required section."
+        f"The report has {words} words, over the {limit}-word limit. Rewrite "
+        f"it to about {target} words: keep every section but cut each one to "
+        "its key points and drop minor numbers and repeated statements."
     ]
 
 
-def unreviewed_result(reason: str, critical_issues: list[str] | None = None) -> dict:
+def length_findings(
+    report: str,
+    revision_count: int,
+    limit: int = MAX_REPORT_WORDS,
+) -> tuple[list[str], list[str]]:
+    """Length problems as ``(critical, minor)``.
+
+    The first draft that is too long is sent back once. Rewriting rarely
+    shortens a report (a real run was still at 837 words after two rounds),
+    so a report that is still long after a revision is only noted: more
+    rounds would cost two LLM calls each and change nothing.
+    """
+
+    critical = report_length_issues(report, limit)
+
+    if not critical:
+        return [], []
+
+    if revision_count == 0:
+        return critical, []
+
+    words = len(report.split())
+
+    return [], [
+        f"The report still has {words} words, over the {limit}-word limit, "
+        "after a revision; accepted as is."
+    ]
+
+
+def unreviewed_result(
+    reason: str,
+    critical_issues: list[str] | None = None,
+    minor_issues: list[str] | None = None,
+) -> dict:
     """Result used when the reviewer could not produce a verdict.
 
-    Problems found in code are still reported, and they still send the
-    report back for a revision.
+    Problems found in code are still reported, and critical ones still send
+    the report back for a revision.
     """
 
     review = {
         "verdict": "NEEDS_REVISION" if critical_issues else "UNREVIEWED",
         "critical_issues": list(critical_issues or []),
-        "other_issues": [reason],
+        "other_issues": [reason, *(minor_issues or [])],
         "recommendations": [],
     }
 
@@ -140,7 +181,9 @@ def reviewer_agent(state: dict) -> dict:
         max_chars=6000,
     )
 
-    length_issues = report_length_issues(str(final_report))
+    length_critical, length_minor = length_findings(
+        str(final_report), int(state.get("revision_count") or 0)
+    )
 
     parser = PydanticOutputParser(pydantic_object=ReviewResult)
 
@@ -165,15 +208,19 @@ def reviewer_agent(state: dict) -> dict:
     except ValueError as exc:
         return unreviewed_result(
             f"The review could not be parsed ({type(exc).__name__}).",
-            length_issues,
+            length_critical,
+            length_minor,
         )
     except Exception as exc:
         return unreviewed_result(
-            f"The review model call failed: {exc}", length_issues
+            f"The review model call failed: {exc}",
+            length_critical,
+            length_minor,
         )
 
     review = result.model_dump()
-    review["critical_issues"] = [*length_issues, *review["critical_issues"]]
+    review["critical_issues"] = [*length_critical, *review["critical_issues"]]
+    review["other_issues"] = [*length_minor, *review["other_issues"]]
 
     # A critical issue always means the report needs another pass.
     if review["critical_issues"]:

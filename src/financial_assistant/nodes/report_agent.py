@@ -5,6 +5,23 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from financial_assistant.clock import utc_now
 from financial_assistant.config import MAX_REPORT_WORDS, get_model
 
+# A single overall limit is not enough: the model cannot plan its length, and
+# rewriting does not shorten a report. A budget per section can be followed.
+SECTION_WORD_BUDGETS = {
+    "Executive Summary": 60,
+    "Market Snapshot": 70,
+    "Technical Analysis": 150,
+    "Relevant News": 110,
+    "Risks and Limitations": 70,
+    "Conclusion": 40,
+    "Sources": 30,
+}
+
+SECTIONS_TEXT = "\n".join(
+    f"{number}. {name} (up to {budget} words)"
+    for number, (name, budget) in enumerate(SECTION_WORD_BUDGETS.items(), 1)
+)
+
 SYSTEM_PROMPT = f"""
 You are the final reporting agent in a financial research assistant.
 
@@ -42,17 +59,12 @@ Rules:
   support. Return the complete revised report, not a list of changes.
 - Avoid repeating information across sections.
 - Keep the report under {MAX_REPORT_WORDS} words (aim for about 500).
-  When asked to shorten it, remove repetition and minor details but keep
-  every required section.
+  Every section has a word budget below. Never exceed it: leave out minor
+  details and minor numbers instead. When asked to shorten the report,
+  cut each section to its key points; do not just rephrase it.
 
-Use these sections:
-1. Executive Summary
-2. Market Snapshot
-3. Technical Analysis
-4. Relevant News
-5. Risks and Limitations
-6. Conclusion
-7. Sources
+Use these sections, with their word budgets:
+{SECTIONS_TEXT}
 
 Use compact bullets instead of large tables.
 Include only the most relevant news.

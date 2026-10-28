@@ -166,3 +166,26 @@ def test_report_receives_the_forecast_and_must_not_contradict_it(monkeypatch):
     _, evidence = run_report(monkeypatch, {"forecast": forecast})
 
     assert evidence["forecast"] == forecast
+
+
+def test_every_section_has_a_word_budget_that_fits_the_limit():
+    from evaluation.evaluators import REQUIRED_SECTIONS
+    from financial_assistant.config import MAX_REPORT_WORDS
+    from financial_assistant.nodes import report_agent as module
+
+    budgets = module.SECTION_WORD_BUDGETS
+
+    assert list(budgets) == REQUIRED_SECTIONS  # same sections, same order
+    assert sum(budgets.values()) < MAX_REPORT_WORDS  # leaves room to spare
+
+
+def test_the_prompt_lists_the_sections_with_their_budgets():
+    from financial_assistant.nodes import report_agent as module
+
+    prompt = module.SYSTEM_PROMPT
+
+    assert "3. Technical Analysis (up to 150 words)" in prompt
+    assert "1. Executive Summary (up to 60 words)" in prompt
+    assert "7. Sources (up to 30 words)" in prompt
+    assert "Never exceed it" in prompt
+    assert "do not just rephrase it" in prompt

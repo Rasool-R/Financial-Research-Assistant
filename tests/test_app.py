@@ -625,3 +625,147 @@ def test_the_parser_defaults():
 
     assert args.question == [] and args.lang == "auto"
     assert not args.full and not args.no_log
+
+
+# --------------------------------------------------------------------------
+# A shorter, plainer summary
+# --------------------------------------------------------------------------
+
+
+def test_the_summary_cap_is_200_characters():
+    assert app.MAX_BRIEF_CHARS == 200
+    assert app.MAX_BRIEF_SENTENCES == 2
+
+
+def test_two_sentences_that_are_too_long_are_reduced_to_the_first_whole_one():
+    first = "The short term trend is up and momentum is positive."
+    second = "The main risk is " + "a firmer dollar and rising yields " * 6 + "."
+
+    brief = app.clean_brief(f"{first} {second}")
+
+    assert brief == first  # a whole sentence, not one cut in the middle
+    assert "…" not in brief
+
+
+def test_a_single_sentence_that_is_too_long_is_cut_at_a_word_with_an_ellipsis():
+    brief = app.clean_brief("trend " * 100)
+
+    assert len(brief) <= app.MAX_BRIEF_CHARS + 1
+    assert brief.endswith("…")
+    assert not brief.endswith("tren…")
+
+
+def test_the_users_real_brief_is_shortened_to_its_first_sentence():
+    brief = app.clean_brief(
+        "قیمت در ساعت‌های آینده تحت تأثیر روند صعودی کوتاه‌مدت و مومنتوم مثبت "
+        "(SMA‑20 SMA‑50، MACD مثبت، RSI ≈ 65) است که نزدیک باند بالایی بولینگر "
+        "(~4022) قرار دارد. ریسک اصلی نزدیکی به سقف نرم و سیگنال‌های نزولی "
+        "چارچوب‌های بالاتر و اخبار اخیر نرخ بهره فدرال است."
+    )
+
+    assert len(brief) <= app.MAX_BRIEF_CHARS
+    assert brief.endswith("قرار دارد.")
+
+
+def test_the_prompt_asks_for_plain_short_wording():
+    prompt = " ".join(app.BRIEF_SYSTEM_PROMPT.split())  # ignore line breaks
+
+    assert "about 25 words" in prompt
+    assert "At most 2 short sentences" in prompt
+    assert "instead of indicator names such as SMA, MACD, RSI" in prompt
+    assert "at most one number" in prompt.lower()
+    assert "Do not translate jargon word for word" in prompt
+    assert "avoid English abbreviations in Persian" in prompt
+    assert "Never contradict" in prompt  # the earlier safety rules remain
+
+
+# --------------------------------------------------------------------------
+# Why the reviewer objected
+# --------------------------------------------------------------------------
+
+
+def reviewed(**review):
+    return make_result(review={"verdict": "NEEDS_REVISION", **review})
+
+
+def lines_for(workflow, result, question="gold in 2 hours"):
+    workflow["result"] = result
+    return result
+
+
+def test_the_reviewers_reason_is_shown_under_the_warning(workflow, capsys):
+    lines_for(
+        workflow,
+        reviewed(critical_issues=["The report has 627 words, over the limit."]),
+    )
+
+    run_once(workflow, "gold in 2 hours")
+
+    lines = capsys.readouterr().out.strip().splitlines()
+    warning = lines.index(EN["review"])
+    assert lines[warning + 1] == (
+        "  Reason: The report has 627 words, over the limit."
+    )
+    assert lines[-1] == EN["disclaimer"]
+
+
+def test_a_long_reason_is_cut_at_a_word_and_counts_the_others(workflow, capsys):
+    long_issue = "The report says the 1day trend is bullish " + "but " * 60
+    lines_for(workflow, reviewed(critical_issues=[long_issue, "b", "c"]))
+
+    run_once(workflow, "gold in 2 hours")
+
+    reason = next(
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("  Reason:")
+    )
+    assert "…" in reason
+    assert reason.endswith("(+2 more)")
+    assert len(reason) < app.MAX_REASON_CHARS + 40
+
+
+def test_the_reason_is_labelled_in_persian_too(workflow, capsys):
+    lines_for(workflow, reviewed(critical_issues=["Wrong RSI value."]))
+
+    run_once(workflow, "طلا ۲ ساعت آینده")
+
+    out = capsys.readouterr().out
+    assert "علت (به انگلیسی): Wrong RSI value." in out
+
+
+def test_without_any_issue_text_there_is_just_the_warning(workflow, capsys):
+    lines_for(workflow, reviewed())
+
+    run_once(workflow, "gold in 2 hours")
+
+    out = capsys.readouterr().out
+    assert EN["review"] in out
+    assert "Reason:" not in out
+
+
+def test_other_issues_are_used_when_there_is_no_critical_one():
+    review = {"verdict": "NEEDS_REVISION", "other_issues": ["Minor wording."]}
+
+    assert app.review_reason(review, "en") == "  Reason: Minor wording."
+
+
+def test_a_passing_review_shows_no_warning_and_no_reason(workflow, capsys):
+    lines_for(
+        workflow,
+        make_result(review={"verdict": "PASS", "critical_issues": ["x"]}),
+    )
+
+    run_once(workflow, "gold in 2 hours")
+
+    out = capsys.readouterr().out
+    assert "⚠" not in out and "Reason:" not in out
+
+
+def test_the_reason_is_only_one_extra_line(workflow, capsys):
+    lines_for(workflow, reviewed(critical_issues=["Wrong RSI value."]))
+
+    run_once(workflow, "gold in 2 hours")
+
+    # header, summary, forecast, warning, reason, disclaimer
+    assert len(capsys.readouterr().out.strip().splitlines()) == 6

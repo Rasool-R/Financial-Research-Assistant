@@ -28,7 +28,7 @@ flowchart LR
 | `analysis_agent` | Risk and levels analyst. Works from the same summary but covers a different job: volatility (ATR, Bollinger), nearest support/resistance in ATR units, bull and bear conditions, and invalidation levels. It does not see the trend analysis, so the two views stay independent. |
 | `research_agent` | Runs several short keyword queries per instrument (plus your own question) in parallel, keeps only recent articles, ranks and deduplicates them, and extracts validated findings with `relevance` (high/medium/low) and `sentiment` (bullish/bearish/neutral). URLs, titles and dates are copied from the real search results, never trusted from the LLM. |
 | `report_agent` | Writes the final report from the evidence. On a revision it receives its previous draft plus the reviewer's feedback. |
-| `reviewer_agent` | Returns a structured verdict (`PASS` / `NEEDS_REVISION`) with critical issues and recommendations. Checks done in code (currently the word limit) are added to the LLM's findings and force a revision even if the LLM says `PASS`. |
+| `reviewer_agent` | Returns a structured verdict (`PASS` / `NEEDS_REVISION`) with critical issues and recommendations. Checks done in code (currently the word limit) are added to the LLM's findings. An over-long first draft is sent back once, with a target of about 85% of the limit, even if the LLM says `PASS`; if it is still long after that it is only noted, because rewriting rarely shortens a report. |
 
 Design notes:
 
@@ -95,6 +95,9 @@ the picture, the forecast direction and a one-line disclaimer.
 پیش‌بینی: صعودی ↑ (اطمینان: متوسط)
 این توصیه‌ی مالی نیست.
 ```
+
+Extra lines appear only when needed: stale data, a reviewer objection (with
+the reason, taken from its first critical issue) or an unavailable source.
 
 The direction line is written by code from the model's machine-readable
 forecast, never by the free-text sentence, so the two cannot contradict each
@@ -180,7 +183,7 @@ scores each report with deterministic checks:
 | Check | Verifies |
 | --- | --- |
 | `required_sections` | All seven sections are present. |
-| `word_limit` | Report stays within 600 words. The reviewer enforces this by counting in code and sends an over-long report back for revision. |
+| `word_limit` | Report stays within 600 words. The report prompt gives every section a word budget; the reviewer counts in code and asks for one rewrite. This check stays strict, so it shows how well the report agent really complies. |
 | `grounded_numbers` | Every price / indicator number in the report exists in the market data or news, matched at the precision it is written. Understands `4,397.92`, `4 397.92`, `4'397.92`, `4.397,92`; round numbers (`7,000`) and `about ...` are accepted as roundings. Numbers the model *derives* itself (differences, ratios) cannot be verified and are listed for you to judge. |
 | `sources_from_research` | Every URL in the report comes from the research findings. |
 | `no_guarantees_or_advice` | No guarantees or buy/sell instructions. |

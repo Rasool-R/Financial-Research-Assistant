@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from financial_assistant.nodes import reviewer_agent as module
 from tests.fakes import FakeModel
 
@@ -135,12 +137,16 @@ def test_reviewer_sees_the_forecast(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def run_with_report(monkeypatch, report, replies):
+def run_with_report(monkeypatch, report, replies, revision_count=0):
     model = FakeModel(replies)
     monkeypatch.setattr(module, "get_model", lambda: model)
 
     return module.reviewer_agent(
-        {"final_report": report, "market_summary": MARKET_SUMMARY}
+        {
+            "final_report": report,
+            "market_summary": MARKET_SUMMARY,
+            "revision_count": revision_count,
+        }
     )
 
 
@@ -155,7 +161,7 @@ def test_an_over_long_report_must_be_revised_even_if_the_llm_says_pass(
     issue = result["review"]["critical_issues"][0]
     assert "650 words" in issue
     assert "600-word limit" in issue
-    assert "at least 50 words" in issue
+    assert "about 510 words" in issue
     assert "NEEDS_REVISION" in result["review_feedback"]
 
 
@@ -211,3 +217,75 @@ def test_reviewer_and_evaluator_count_words_the_same_way():
         assert bool(module.report_length_issues(text)) is (
             not check_word_limit(text).passed
         )
+
+
+# --------------------------------------------------------------------------
+# The length is enforced once: rewriting does not shorten a report
+# --------------------------------------------------------------------------
+
+
+def test_the_shortening_request_aims_below_the_limit():
+    (issue,) = module.report_length_issues("word " * 837)
+
+    assert "837 words" in issue
+    assert "about 510 words" in issue  # 85% of 600, not the limit itself
+    assert module.LENGTH_TARGET_FRACTION == 0.85
+
+
+def test_a_report_still_too_long_after_a_revision_is_noted_not_sent_back(
+    monkeypatch,
+):
+    result = run_with_report(
+        monkeypatch, "word " * 837, [review_json("PASS")], revision_count=1
+    )
+
+    review = result["review"]
+    assert review["verdict"] == "PASS"  # no new round, no scary warning
+    assert review["critical_issues"] == []
+    assert "837 words" in review["other_issues"][0]
+    assert "after a revision; accepted as is" in review["other_issues"][0]
+
+
+def test_real_problems_still_force_a_revision_after_the_length_was_noted(
+    monkeypatch,
+):
+    result = run_with_report(
+        monkeypatch,
+        "word " * 837,
+        [review_json("NEEDS_REVISION", critical=["RSI value is wrong"])],
+        revision_count=1,
+    )
+
+    review = result["review"]
+    assert review["verdict"] == "NEEDS_REVISION"
+    assert review["critical_issues"] == ["RSI value is wrong"]
+    assert "837 words" in review["other_issues"][0]  # still recorded
+
+
+def test_a_failed_review_of_a_revised_long_report_is_unreviewed(monkeypatch):
+    result = run_with_report(
+        monkeypatch, "word " * 700, ["bad", "still bad"], revision_count=1
+    )
+
+    review = result["review"]
+    assert review["verdict"] == "UNREVIEWED"
+    assert review["critical_issues"] == []
+    assert "could not be parsed" in review["other_issues"][0]
+    assert "700 words" in review["other_issues"][1]
+
+
+@pytest.mark.parametrize("revision_count", [0, 1, 2])
+def test_a_report_within_the_limit_is_never_flagged(monkeypatch, revision_count):
+    result = run_with_report(
+        monkeypatch, "word " * 600, [review_json("PASS")], revision_count
+    )
+
+    assert result["review"]["critical_issues"] == []
+    assert result["review"]["other_issues"] == []
+
+
+def test_the_first_review_is_the_only_one_that_demands_a_rewrite():
+    assert module.length_findings("word " * 700, 0)[0]
+    assert module.length_findings("word " * 700, 1)[0] == []
+    assert module.length_findings("word " * 700, 2)[0] == []
+    assert module.length_findings("word " * 100, 0) == ([], [])

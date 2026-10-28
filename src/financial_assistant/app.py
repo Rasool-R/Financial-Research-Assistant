@@ -38,7 +38,8 @@ from financial_assistant.retry import call_with_retries
 
 MAX_ASKS = 3  # follow-up questions before giving up or using a default
 MAX_BRIEF_SENTENCES = 2
-MAX_BRIEF_CHARS = 320
+MAX_BRIEF_CHARS = 200
+MAX_REASON_CHARS = 120
 
 EXIT_WORDS = {"exit", "quit", "q", "خروج"}
 DETAILS_WORDS = {"details", "report", "جزئیات", "گزارش"}
@@ -80,6 +81,8 @@ TEXT = {
         "unknown": "نامشخص (مدل جهت مشخصی نداد؛ دوباره امتحان کن)",
         "stale": "⚠ داده‌ها کهنه‌اند (بازار احتمالاً بسته است)؛ قیمت‌ها زنده نیستند.",
         "review": "⚠ بازبین هنوز ایراد جدی دیده؛ با احتیاط بخوان.",
+        "reason": "  علت (به انگلیسی): {reason}",
+        "more": " (+{n} مورد دیگر)",
         "errors": "⚠ بعضی منابع در دسترس نبودند؛ برای جزئیات «جزئیات» را بنویس.",
         "disclaimer": "این توصیه‌ی مالی نیست.",
         "error": "خطا: {message}",
@@ -134,6 +137,8 @@ TEXT = {
             "prices are not live."
         ),
         "review": "⚠ The reviewer still saw a serious problem; read with care.",
+        "reason": "  Reason: {reason}",
+        "more": " (+{n} more)",
         "errors": "⚠ Some sources were unavailable; type 'details' for more.",
         "disclaimer": "Not financial advice.",
         "error": "Error: {message}",
@@ -155,19 +160,22 @@ TEXT = {
 
 BRIEF_SYSTEM_PROMPT = """
 You write the one-to-two sentence answer shown to the user of a market
-assistant.
+assistant. The user is not a trader: keep it short, plain and calm.
 
 Rules:
 - Use only facts from the supplied report. Never invent numbers, price levels,
   news or dates.
-- At most 2 short sentences (about 40 words in total). No lists, headings or
-  markdown.
-- Say what mainly drives the picture (for example trend and momentum, a nearby
-  level, or the news) and, if it matters, the main risk.
+- At most 2 short sentences, about 25 words in total. No lists, headings,
+  markdown or parentheses.
+- Say what mainly drives the picture and, if it matters, the main risk. Use
+  plain words (trend, momentum, overbought, volatility, resistance) instead of
+  indicator names such as SMA, MACD, RSI, ATR or Bollinger, unless one of them
+  is the main reason. Use at most one number.
 - The forecast direction is printed separately. Never contradict it and do not
   repeat it as a command.
 - No price targets and no financial advice.
-- Write in the requested language.
+- Write in the requested language, in natural everyday wording. Do not
+  translate jargon word for word, and avoid English abbreviations in Persian.
 """
 
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?؟…])\s+")
@@ -231,16 +239,50 @@ def limit_sentences(text: str, count: int) -> str:
 
 
 def clean_brief(text: str) -> str:
-    """At most two sentences and 320 characters, with no markdown."""
+    """At most two sentences and 200 characters, with no markdown.
+
+    If two sentences are too long, the first one alone is kept: a whole
+    sentence reads better than one that is cut off.
+    """
 
     text = re.sub(r"[*_`#>]+", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     text = limit_sentences(text, MAX_BRIEF_SENTENCES)
 
     if len(text) > MAX_BRIEF_CHARS:
+        first = limit_sentences(text, 1)
+
+        if len(first) <= MAX_BRIEF_CHARS:
+            text = first
+
+    if len(text) > MAX_BRIEF_CHARS:
         text = text[:MAX_BRIEF_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
     return text
+
+
+def review_reason(review: dict, language: str) -> str | None:
+    """One line saying WHY the reviewer objected (its first critical issue)."""
+
+    labels = TEXT[language]
+    critical = review.get("critical_issues") or []
+    issues = critical or review.get("other_issues") or []
+
+    if not issues:
+        return None
+
+    text = re.sub(r"\s+", " ", str(issues[0])).strip()
+
+    if len(text) > MAX_REASON_CHARS:
+        cut = text[:MAX_REASON_CHARS].rsplit(" ", 1)[0]
+        text = cut.rstrip(",;:.") + "…"
+
+    line = labels["reason"].format(reason=text)
+
+    if len(critical) > 1:
+        line += labels["more"].format(n=len(critical) - 1)
+
+    return line
 
 
 def fallback_brief(report: str) -> str:
@@ -350,8 +392,14 @@ def format_answer(
     if (summary.get("data_quality") or {}).get("is_stale"):
         lines.append(labels["stale"])
 
-    if (result.get("review") or {}).get("verdict") == "NEEDS_REVISION":
+    review = result.get("review") or {}
+
+    if review.get("verdict") == "NEEDS_REVISION":
         lines.append(labels["review"])
+        reason = review_reason(review, language)
+
+        if reason:
+            lines.append(reason)
 
     if result.get("errors"):
         lines.append(labels["errors"])

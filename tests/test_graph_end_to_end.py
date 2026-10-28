@@ -257,3 +257,34 @@ def test_an_over_long_report_is_sent_back_and_shortened(monkeypatch):
     feedback = model.report_inputs[1]["reviewer_feedback"]
     assert "650 words" in feedback["critical_issues"][0]
     assert model.report_inputs[1]["previous_report"].startswith("word word")
+
+
+def test_a_report_that_stays_too_long_costs_one_revision_not_two(monkeypatch):
+    """The model cannot shorten the report; the loop must not keep trying.
+
+    A real run was still at 837 words after two rewrites. Only the first
+    review may demand a rewrite; afterwards the length is just noted.
+    """
+
+    class NeverShortens(RoutingModel):
+        def invoke(self, messages):
+            response = super().invoke(messages)
+            if response.content.startswith("report v"):
+                return FakeResponse("word " * 650)
+            return response
+
+    # exactly two reviews are available: a third one would raise IndexError
+    model = NeverShortens([review("PASS"), review("PASS")])
+
+    result = run_real_graph(monkeypatch, model)
+
+    assert len(model.report_inputs) == 2  # the first draft and ONE revision
+    assert result["revision_count"] == 1
+    assert result["review"]["verdict"] == "PASS"
+    assert any(
+        "after a revision; accepted as is" in issue
+        for issue in result["review"]["other_issues"]
+    )
+    assert "about 510 words" in (
+        model.report_inputs[1]["reviewer_feedback"]["critical_issues"][0]
+    )
